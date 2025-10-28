@@ -29,6 +29,8 @@ set(MUJOCO_ENGINE_SRCS
     engine_collision_sdf.h
     engine_core_constraint.c
     engine_core_constraint.h
+    engine_core_util.c
+    engine_core_util.h
     engine_core_smooth.c
     engine_core_smooth.h
     engine_crossplatform.cc
@@ -42,11 +44,15 @@ set(MUJOCO_ENGINE_SRCS
     engine_global_table.h
     engine_inverse.c
     engine_inverse.h
+    engine_init.c
+    engine_init.h
     engine_island.c
     engine_island.h
     engine_io.c
     engine_io.h
     engine_macro.h
+    engine_memory.c
+    engine_memory.h
     engine_name.c
     engine_name.h
     engine_passive.c
@@ -63,6 +69,7 @@ set(MUJOCO_ENGINE_SRCS
     engine_setconst.h
     engine_solver.c
     engine_solver.h
+    engine_sort.h
     engine_support.c
     engine_support.h
     engine_util_blas.c
@@ -82,8 +89,6 @@ set(MUJOCO_ENGINE_SRCS
     engine_vis_init.h
     engine_vis_interact.c
     engine_vis_interact.h
-    engine_vis_state.c
-    engine_vis_state.h
     engine_vis_visualize.c
     engine_vis_visualize.h
 )

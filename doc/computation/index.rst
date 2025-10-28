@@ -151,68 +151,68 @@ mathematical notation.
      - Size
      - Description
      - MuJoCo field
-   * - :math:`n_Q`
+   * - :math:`\nq`
      -
      - number of position coordinates
      - ``mjModel.nq``
-   * - :math:`n_V`
+   * - :math:`\nv`
      -
      - number of degrees of freedom
      - ``mjModel.nv``
-   * - :math:`n_C`
+   * - :math:`\nc`
      -
      - number of active constraints
      - ``mjData.nefc``
    * - :math:`q`
-     - :math:`n_Q`
+     - :math:`\nq`
      - joint position
      - ``mjData.qpos``
    * - :math:`v`
-     - :math:`n_V`
+     - :math:`\nv`
      - joint velocity
      - ``mjData.qvel``
    * - :math:`\tau`
-     - :math:`n_V`
+     - :math:`\nv`
      - applied force: passive, actuation, external
      - ``mjData.qfrc_passive`` + ``mjData.qfrc_actuator`` + ``mjData.qfrc_applied``
    * - :math:`c(q, v)`
-     - :math:`n_V`
+     - :math:`\nv`
      - bias force: Coriolis, centrifugal, gravitational
      - ``mjData.qfrc_bias``
    * - :math:`M(q)`
-     - :math:`n_V \times n_V`
+     - :math:`\nv \times \nv`
      - inertia in joint space
      - ``mjData.qM``
    * - :math:`J(q)`
-     - :math:`n_C \times n_V`
+     - :math:`\nq \times \nv`
      - constraint
        Jacobian
      - ``mjData.efc_J``
    * - :math:`r(q)`
-     - :math:`n_C`
+     - :math:`\nq`
      - constraint residual
      - ``mjData.efc_pos``
    * - :math:`f(q, v,\tau)`
-     - :math:`n_C`
+     - :math:`\nq`
      - constraint force
      - ``mjData.efc_force``
 
 All model elements are enumerated at compile time and assembled into the above system-level vectors and matrices. In our
-earlier arm model :ref:`example <Examples>` the model has :math:`n_V = 13` degrees of freedom: 3 for the ball joint, one
+earlier arm model :ref:`example <Examples>` the model has :math:`\nv = 13` degrees of freedom: 3 for the ball joint, one
 for each of the 4 hinge joints, and 6 for the free-floating object. They appear in the same order in all system-level
-vectors and matrices whose dimensionality is :math:`n_V`. The data corresponding to a given model element can be
+vectors and matrices whose dimensionality is :math:`\nv`. The data corresponding to a given model element can be
 recovered via indexing operations as illustrated in the :ref:`Clarifications` section in the Overview chapter. Vectors
-and matrices with dimensionality :math:`n_C` are somewhat different because the active :ref:`constraints <Constraint>`
+and matrices with dimensionality :math:`\nq` are somewhat different because the active :ref:`constraints <Constraint>`
 change at runtime. In that case there is still a fixed enumeration order (corresponding to the order in which the model
 elements appear in ``mjModel``) but any inactive constraints are omitted.
 
-The number of position coordinates :math:`n_Q` is larger than the number of degrees of freedom :math:`n_V` whenever
+The number of position coordinates :math:`\nq` is larger than the number of degrees of freedom :math:`\nv` whenever
 quaternions are used to represent 3D orientations. This occurs when the model contains ball joints or free joints (i.e.,
 in most models). In that case :math:`\dot{q}` does not equal :math:`v`, at least not in the usual sense. Instead one has
 to consider the group of rigid body orientations :math:`SO(3)` - which has the geometry of a unit sphere in 4D space.
 Velocities live in the 3D tangent space to this sphere. This is taken into account by all internal computations. For
 custom computations, MuJoCo provides the function :ref:`mj_differentiatePos` which "subtracts" two position vectors with
-dimensionality :math:`n_Q` and returns a velocity vector with dimensionality :math:`n_V`. A number of quaternion-related
+dimensionality :math:`\nq` and returns a velocity vector with dimensionality :math:`\nv`. A number of quaternion-related
 utility functions are also provided.
 
 MuJoCo computes both forward and inverse dynamics in continuous time. Forward dynamics are then integrated over the
@@ -241,7 +241,7 @@ The computation of the constraint force is the hard part and will be described l
 description of the general framework by summarizing how the above quantities up to the constraint Jacobian are computed.
 
 -  The applied force :math:`\tau` includes :ref:`passive <gePassive>` forces from spring-dampers and fluid dynamics,
-   :ref:`actuation <geActuation>` forces, and additonal forces specified by the user.
+   :ref:`actuation <geActuation>` forces, and additional forces specified by the user.
 -  The bias force :math:`c` includes Coriolis, centrifugal and gravitational forces. Their sum is computed using the
    Recursive Newton-Euler (RNE) algorithm with acceleration set to 0.
 -  The joint-space inertia matrix :math:`M` is computed using the Composite Rigid-Body (CRB) algorithm. This matrix is
@@ -279,7 +279,7 @@ Transmission
 ^^^^^^^^^^^^
 
 Each actuator has a scalar length :math:`l_i(q)` defined by the type of transmission and its parameters. The gradient
-:math:`\nabla l_i` is an :math:`n_V`-dimensional vector of moment arms. It determines the mapping from scalar
+:math:`\nabla l_i` is an :math:`\nv`-dimensional vector of moment arms. It determines the mapping from scalar
 actuator force to joint force. The transmission properties are determined by the MuJoCo object to which the actuator
 is attached; the possible attachment object types are :at:`joint`, :at:`tendon`, :at:`jointinparent`,
 :at:`slider-crank`, :at:`site`, and :at:`body`.
@@ -414,7 +414,7 @@ with MuJoCo's operation as long as such user forces depend only on position and 
 
 MuJoCo can compute three types of passive forces:
 
-- Spring-dampers in joints and tendons. See the following attribues for details.
+- Spring-dampers in joints and tendons. See the following attributes for details.
   |br| **Joints:**
   :ref:`stiffness<body-joint-stiffness>`, :ref:`springref<body-joint-springref>`,
   :ref:`damping<body-joint-damping>`, :ref:`springdamper<body-joint-springdamper>`.
@@ -484,24 +484,27 @@ acceleration as a function of velocity: :math:`a_t = a(v_t)`, the velocity updat
 This is a non-linear equation in the unknown vector :math:`v_{t+h}` and can be solved numerically at each time step
 using a first-order expansion of :math:`a(v_{t+h})` around :math:`v_t`. Recall that the forward dynamics are
 
-.. math:: a(v) = M^{-1} \big(\tau(v) - c(v) + J^T f(v)\big)
+.. math::
+   :label: eq_forward
+
+   a(v) = M^{-1} \big(\tau(v) - c(v) + J^T f(v)\big)
 
 Thus we define the derivative
 
 .. math::
-  \begin{aligned}
-      {\partial a(v) \over \partial v} &= M^{-1} D \\
-      D &\equiv {\partial \over \partial v} \Big(\tau(v) - c (v) + J^T f(v)\Big)
-  \end{aligned}
+   \begin{aligned}
+       {\partial a(v) \over \partial v} &= M^{-1} D \\
+       D &\equiv {\partial \over \partial v} \Big(\tau(v) - c (v) + J^T f(v)\Big)
+   \end{aligned}
 
 The velocity update corresponding to Newton's method is as follows. First, we expand the right hand side to first order
 
 .. math::
-  \begin{aligned}
-     v_{t+h} &= v_t + h a(v_{t+h}) \\
-             &\approx v_t + h \big( a(v_t) + {\partial a(v) \over \partial v} \cdot (v_{t+h}-v_t) \big) \\
-             &= v_t + h a(v_t) + h M^{-1} D \cdot (v_{t+h}-v_t)
-  \end{aligned}
+   \begin{aligned}
+      v_{t+h} &= v_t + h a(v_{t+h}) \\
+              &\approx v_t + h \big( a(v_t) + {\partial a(v) \over \partial v} \cdot (v_{t+h}-v_t) \big) \\
+              &= v_t + h a(v_t) + h M^{-1} D \cdot (v_{t+h}-v_t)
+   \end{aligned}
 
 Premultiplying by :math:`M` and rearranging yields
 
@@ -512,16 +515,27 @@ Solving for :math:`v_{t+h}`, we obtain the implicit-in-velocity update
 .. math::
    :label: eq_implicit_update
 
-   v_{t+h} = v_t + h (M-h D)^{-1} M a(v_t)
+   \begin{aligned}
+       v_{t+h} &= v_t + h \widehat{M}^{-1} M a(v_t) \\
+       \widehat{M} &\equiv M-h D
+   \end{aligned}
 
+.. _geIntegrators:
+
+Integrators
+^^^^^^^^^^^
+MuJoCo supports four integrators: three single-step integrators and the multi-step 4th order Runge-Kutta integrator.
 All three single-step integrators in MuJoCo use the update :eq:`eq_implicit_update`, with different definitions of the
 :math:`D` matrix, which is always computed analytically.
 
 Semi-implicit with implicit joint damping (``Euler``)
    For this method, :math:`D` only includes derivatives of joint damping. Note that in this case :math:`D` is diagonal
-   and :math:`M-h D` is symmetric, so Cholesky decomposition can be used. If the model has no joint damping or the
+   and :math:`\widehat{M}` is symmetric, so :math:`L^TL` decomposition (a variant of Cholesky) can be used. This
+   factorization is stored ``mjData.qLD``. If the model has no joint damping or the
    :ref:`eulerdamp<option-flag-eulerdamp>` disable-flag is set, implicit damping is disabled and the semi-implicit
-   update :eq:`eq_semimplicit` is used, rather than :eq:`eq_implicit_update`.
+   update :eq:`eq_semimplicit` is used, rather than :eq:`eq_implicit_update`, avoiding the additional factorization of
+   :math:`\widehat{M}` (*additional* because :math:`M` is already factorized for the acceleration update
+   :eq:`eq_forward`).
 
 Implicit-in-velocity (``implicit``)
    For this method, :math:`D` includes derivatives of all forces except the constraint forces :math:`J^T f(v)`. These
@@ -530,8 +544,8 @@ Implicit-in-velocity (``implicit``)
    future version. Additionally, we restrict :math:`D` to have the same sparsity pattern as :math:`M`, for computational
    efficiency. This restriction will exclude damping in tendons which connect bodies that are on different branches of
    the kinematic tree. Since :math:`D` is not symmetric, we cannot use Cholesky factorization, but because :math:`D` and
-   :math:`M` have the same sparsity pattern corresponding to the topology of the kinematic tree, reverse-order LU
-   factorization of :math:`M-h D` is `guaranteed to have no fill-in
+   :math:`M` have the same sparsity pattern corresponding to the topology of the kinematic tree, reverse-order
+   :math:`LU` factorization of :math:`\widehat{M}` is guaranteed to have `no fill-in
    <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`_.  This factorization is stored ``mjData.qLU``.
 
 Fast implicit-in-velocity (``implicitfast``)
@@ -541,7 +555,7 @@ Fast implicit-in-velocity (``implicitfast``)
    Second, these forces change rapidly only at high rotational velocities of complex pendula and spinning bodies,
    scenarios which are not common and already well-handled by the Runge-Kutta integrator (see below). Because the RNE
    derivatives are also the main source of asymmetry of :math:`D`, by dropping them and symmetrizing, we can use the
-   faster Cholesky rather than LU decomposition.
+   faster :math:`L^TL` rather than :math:`LU` decomposition.
 
 4th-order Runge-Kutta (``RK4``)
    One advantage of our continuous-time formulation is that we can use higher order integrators such as Runge-Kutta or
@@ -569,15 +583,14 @@ Fast implicit-in-velocity (``implicitfast``)
     performance.
 
     **Euler**:
-     Use ``Euler`` for compatibillity with older models and :ref:`MJX<Mjx>`. Specifically for MJX,
-     setting the :ref:`eulerdamp<option-flag-eulerdamp>` disable flag can :ref:`improve performance<MjxPerformance>`.
+     Use ``Euler`` for compatibillity with older models.
     **implicitfast**:
      The ``implicitfast`` integrator has similar computational cost to ``Euler``, yet provides
      increased stability, and is therefore a strict improvement. It is the recommended integrator for most models.
     **implicit**:
      The benefit over ``implicitfast`` is the implicit integration of Coriolis and centripetal forces, including
-     gyroscopic forces. The most common case where integrating such forces implicitly leads to noticable improvement is
-     when free objects with assymetric inertia are spinning quickly. `gyroscopic.xml <../_static/gyroscopic.xml>`__
+     gyroscopic forces. The most common case where integrating such forces implicitly leads to noticeable improvement is
+     when free objects with asymmetric inertia are spinning quickly. `gyroscopic.xml <../_static/gyroscopic.xml>`__
      shows an ellipsoid rolling on an inclined plane which quickly diverges with ``implicitfast`` but is stable with
      ``implicit``.
     **RK4**:
@@ -646,7 +659,7 @@ Control: ``ctrl``
   generalized forces directly (stateless actuators), or affect the actuator activations in ``mjData.act``, which then
   produce forces.
 
-Auxillary Controls: ``qfrc_applied`` and ``xfrc_applied``
+Auxiliary Controls: ``qfrc_applied`` and ``xfrc_applied``
   | ``mjData.qfrc_applied`` are directly applied generalized forces.
   | ``mjData.xfrc_applied`` are Cartesian wrenches applied to the CoM of individual bodies. This field is used for
     example, by the :ref:`native viewer<saSimulate>` to apply mouse perturbations.
@@ -714,8 +727,8 @@ Constraint model
 
 MuJoCo has a very flexible constraint model, which is nevertheless handled in a uniform way by the
 :ref:`solver <Solver>` described later. Here we explain what the individual constraints are conceptually, and how they
-are laid out in the system-level vector and matrices with dimensionality :math:`n_C`. Each conceptual constraint can
-contribute one or more scalar constraints towards the total count :math:`n_C`, and each scalar constraint has a
+are laid out in the system-level vector and matrices with dimensionality :math:`\nq`. Each conceptual constraint can
+contribute one or more scalar constraints towards the total count :math:`\nq`, and each scalar constraint has a
 corresponding row in the constraint Jacobian :math:`J`. Active constraints are ordered by type in the order in which the
 types are described below, and then by model element within each type. The types are: equality, friction loss, limit,
 contact. Limits are handled as frictionless contacts by the solver and are not treated as a separate type internally. We
@@ -729,10 +742,10 @@ Equality
 MuJoCo can model equality constraints in the general form :math:`r(q) = 0` where :math:`r` can be any differentiable
 scalar or vector function of the position vector :math:`q`. It has the semantics of a residual. The solver can actually
 work with non-holonomic constraints as well, but we do not yet have such constraint types defined. Each equality
-constraint contributes :math:`\dim(r)` elements to the total constraint count :math:`n_C`. The corresponding block in
+constraint contributes :math:`\dim(r)` elements to the total constraint count :math:`\nq`. The corresponding block in
 :math:`J` is simply the Jacobian of the residual, namely :math:`\partial r / \partial q`. Note that due to the
-properties of quaternions, differentiation with respect to :math:`q` produces vectors of size :math:`n_V` rather than
-:math:`n_Q`.
+properties of quaternions, differentiation with respect to :math:`q` produces vectors of size :math:`\nv` rather than
+:math:`\nq`.
 
 Among other applications, equality constraints can be used to create "loop joints", i.e., joints that cannot be modeled
 via the kinematic tree. Gaming engines represent all joints in this way. The same can be done in MuJoCo but is not
@@ -986,7 +999,7 @@ vectors correspond to the edges of a pyramid. Each vector combines a normal forc
 force or a frictional torque component. The scaling by the friction coefficients ensures that all basis vectors lie
 within the elliptic friction cone we are approximating. The same holds for any convex combination of these vectors.
 
-Finally we specify how the contact Jacobian is computed. First we construct the :math:`6`-by-:math:`n_V` matrix
+Finally we specify how the contact Jacobian is computed. First we construct the :math:`6`-by-:math:`\nv` matrix
 :math:`S` which maps joint velocities :math:`v` to spatial velocities :math:`S v` expressed in the contact frame. This
 is done by considering the contact point as belonging to one or the other geom, computing its spatial Jacobian, and
 subtracting these two Jacobians to obtain :math:`S`. The convention we use is that the contact force acts from the first
@@ -1033,34 +1046,34 @@ We will use the following notation beyond the notation introduced earlier:
      - Size
      - Description
    * - :math:`z`
-     - :math:`n_C`
+     - :math:`\nq`
      - constraint deformations
    * - :math:`\omega`
-     - :math:`n_C`
+     - :math:`\nq`
      - velocity of constraint deformations
    * - :math:`k`
-     - :math:`n_C`
+     - :math:`\nq`
      - virtual constraint stiffness
    * - :math:`b`
-     - :math:`n_C`
+     - :math:`\nq`
      - virtual constraint damping
    * - :math:`d`
-     - :math:`n_C`
+     - :math:`\nq`
      - constraint impedance
    * - :math:`A(q)`
-     - :math:`n_C \times n_C`
+     - :math:`\nq \times \nq`
      - inverse inertia in constraint space
    * - :math:`R(q)`
-     - :math:`n_C \times n_C`
+     - :math:`\nq \times \nq`
      - diagonal regularizer in constraint space
    * - :math:`\ar`
-     - :math:`n_C`
+     - :math:`\nq`
      - reference acceleration in constraint space
    * - :math:`\au(q, v, \tau)`
-     - :math:`n_C`
+     - :math:`\nq`
      - unconstrained acceleration in constraint space
    * - :math:`\ac(q, v, \dot{v})`
-     - :math:`n_C`
+     - :math:`\nq`
      - constrained acceleration in constraint space
    * - :math:`\mathcal{K}(q)`
      -
@@ -1349,14 +1362,44 @@ representations of the constraint Jacobian and related matrices.
    axes. The right panel illustrates our solution to this problem. We still update one contact at a time, but within a
    contact we update along non-orthogonal axes adapted to the constraint surface, as follows. First, we optimize the
    quadratic cost along the ray from the tip of the cone through the current solution. Then we slice the cone with a
-   hyperplane passing through the current solution and orthogonal to the contact normal. This yields an ellipsoid -which
-   can be up to 5-dimensional given our contact model. Now we optimize the quadratic cost within this ellipsoid. This is
-   an instance of quadratically constrained quadratic programming (QCQP). Since there is only one scalar constraint
+   hyperplane passing through the current solution and orthogonal to the contact normal. This yields an ellipsoid which
+   can be up to 5-dimensional, given our contact model. Now we optimize the quadratic cost within this ellipsoid. This
+   is an instance of quadratically constrained quadratic programming (QCQP). Since there is only one scalar constraint
    (however nonlinear it may be), the dual is a scalar optimization problem over the unknown Lagrange multiplier. We
    solve this problem with Newton's method applied until convergence -- which in practice takes less than 10 iterations,
    and involves small matrices. Overall this algorithm has similar behavior to PGS for pyramidal cones, but it can
    handle elliptic cones without approximating them. It does more work per contact, however the contact dimensionality
    is smaller, and these two factors roughly balance each other.
+
+.. _soIsland:
+
+Constraint islands
+~~~~~~~~~~~~~~~~~~
+
+.. image:: ../images/computation/island.svg
+   :width: 58%
+   :align: right
+
+Consider the abstract graph defined by degrees of freedom (dofs) and constraints. A vertex is all the dofs in a single
+kinematic subtree; an edge is a constraint (a contact or equality) between two bodies belonging to different subtrees. A
+*constraint island* is a disjoint sub-graph which can be solved for independently, because constraint forces cannot
+propagate between islands. Constraint island discovery and construction ("islanding") invloves finding the disjoint
+subgraphs and reordering both the dofs and constraints to make them memory-contiguous. This amounts to a
+block-diagonalization of the constraint Jacobian :math:`J`, as illustrated in the figure. On the left is the monolithic
+Jacobian of size :math:`\nc \times \nv`, where we use the :ref:`corresponding <Framework>` size names from MuJoCo's data
+structures ``mjData.nefc`` and ``mjModel.nv``. On the right is the block-diagonalized Jacobian with 3 islands that can
+be solved indepenently. Note that islanding also identifies unconstrained dofs, so ``mjData.nidof``, the total number of
+dofs in all islands, might be smaller than ``mjModel.nv``. While islanding is not free (see implementation in
+`engine_island.c <https://github.com/google-deepmind/mujoco/blob/main/src/engine/engine_island.c>`__), it is worth the
+effort:
+
+- Different islands require different numbers of iterations to converge, and a monolithic solve would run for the
+  number required by the slowest island.
+- Unconstrained dofs are completely untouched by the solver, which otherwise needs to discover that they are unaffected.
+- Solving separate islands can be multi-threaded.
+
+Islanding is not yet supported by the PGS solver.
+
 
 .. _soParameters:
 
@@ -1382,7 +1425,7 @@ Thus the constrained acceleration interpolates between the unconstrained and the
 in the limit :math:`R \to 0` we have a hard constraint and :math:`\ac = \ar`, while in the limit :math:`R \to \infty` we
 have have an infinitely soft constraint (i.e., no constraint) and :math:`\ac = \au`. It is then natural to introduce a
 model parameter which directly controls the interpolation. We call this parameter *impedance* and denote it :math:`d`.
-It is a vector with dimensionality :math:`n_C` satisfying :math:`0<d<1` element-wise. Once it is specified, we compute
+It is a vector with dimensionality :math:`\nq` satisfying :math:`0<d<1` element-wise. Once it is specified, we compute
 the diagonal elements of the regularizer as
 
 .. math::
@@ -1525,27 +1568,105 @@ Filtering
 
 Checking
 ~~~~~~~~
+Detailed collision checking, also known as *near-phase* or narrow-phase_ collision detection, is performed by functions
+that depend on the geom types in the pair. The table of narrow-phase collision functions can be inspected at the top of
+`engine_collision_driver.c <https://github.com/google-deepmind/mujoco/blob/main/src/engine/engine_collision_driver.c>`__
+and exposed to users who wish to install their own colliders as :ref:`mjCOLLISIONFUNC`. MuJoCo supports several
+primitive geometric shapes: plane, sphere, capsule, cylinder, ellipsoid, and box. It also supports triangulated meshes and
+height-fields.
 
-Detailed collision checking is performed by functions that depend on the geom types in the pair. MuJoCo supports several
-primitive geometric shapes: plane, sphere, capsule, cylinder, ellipsoid, box. It also supports triangulated meshes and
-height fields.
+.. _narrow-phase: https://en.wikipedia.org/wiki/Collision_detection#Narrow_phase
 
-We have chosen to limit collision detection to *convex* geoms. All primitive types are convex. Height fields are not
-convex but internally they are treated as unions of triangular prisms (using custom collision pruning beyond the filters
-described above). Meshes specified by the user can be non-convex, and are rendered as such. For collision purposes
-however they are replaced with their convex hulls. Mesh collisions are based on the Minkowski Portal Refinement (MPR)
-algorithm as implemented in `libccd <https://github.com/danfis/libccd>`__. It has tolerance and maximum iteration
-parameters exposed as ``mjModel.opt.mpt_tolerance`` and ``mjModel.opt.mpr_iterations`` respectively. MPR operates on the
-convex hull implicitly, however pre-computing that hull can substantially improve performance for large meshes. The
-model compiler does that by default, using the `qhull <http://www.qhull.org/>`__ library.
+With the notable exception of :ref:`SDF plugins<exSDF>` (see documentation therein), collision detection is limited to
+*convex* geoms. All primitive types are convex. Height-fields are not convex but internally they are treated as a
+collection of triangular prisms (using custom collision pruning beyond the filters described above). Meshes specified by
+the user can be non-convex, and are rendered as such. For collision purposes however they are replaced with their convex
+hulls (visualized with the 'H' key in :ref:`simulate <saSimulate>`), computed by the `qhull <http://www.qhull.org/>`__
+library.
+
+.. _coCCD:
+
+Convex collisions
+^^^^^^^^^^^^^^^^^
+All collisions involving pairs of geoms that do not have an analytic collider (e.g., meshes), are handled by one of two
+general-purpose convex collision detection (CCD) pipelines:
+
+native pipeline (default)
+  The native CCD pipeline ("nativeccd") is implemented natively in MuJoCo, based on the Gilbert-Johnson-Keerthi and
+  Expanding Polytope algorithms (GJK_ / EPA_). The native pipeline is both faster and more robust than the MPR-based
+  pipeline.
+
+libccd pipeline (legacy)
+  This legacy pipeline is based on the libccd_ library, and uses Minkowski Portal Refinement (MPR_). It is activated by
+  disabling the :ref:`nativeccd<option-flag-nativeccd>` flag.
+
+.. _libccd: https://github.com/danfis/libccd
+.. _MPR: https://en.wikipedia.org/wiki/Minkowski_Portal_Refinement
+.. _GJK: https://en.wikipedia.org/wiki/Gilbert%E2%80%93Johnson%E2%80%93Keerthi_distance_algorithm
+.. _EPA: http://scroll.stanford.edu/courses/cs468-01-fall/Papers/van-den-bergen.pdf
+
+Both pipelines are controlled by a tolerance (in units of distance) and maximum iteration parameters exposed as
+``mjOption.ccd_tolerance`` (:ref:`ccd_tolerance<option-ccd_tolerance>`) and ``mjOption.ccd_iterations``
+(:ref:`ccd_iterations<option-ccd_iterations>`), respectively.
+
+.. _coMultiCCD:
+
+Multiple contacts
+^^^^^^^^^^^^^^^^^
+Some colliders can return more than one contact per colliding pair to model line or surface contacts, as when two flat
+objects touch. For example the capsule-plane and box-plane colliders can return up to two or four contacts,
+respectively. Standard general-purpose convex collision algorithms like MPR and GJK always return a single contact
+point, which is problematic for surface contact scenarios (e.g., box-stacking). Both of MuJoCo's CCD pipelines can
+return multiple points per contacting pair ("multiccd"). This behavior is controlled by the
+:ref:`multiccd<option-flag-multiccd>` flag, but is implemented in different ways with different trade-offs:
+
+libccd pipeline (legacy)
+  Multiple contact points are found by rotating the two geoms by ±1e-3 radians around the tangential axes and
+  re-running the collision routine. If a new contact is detected it is added, allowing for up to 4 additional contact
+  points. This method is effective, but increases the cost of each collision call by a factor of 5.
+
+native pipeline
+  Native multiccd discovers multiple contacts using a novel analysis of the contacting surfaces at the solution,
+  avoiding full re-runs of the collision routine, and is thus effectively "free". Note that native multiccd currently
+  does not support positive contact margins. If one of the two geoms has a positive margin, native multiccd will fall
+  back to legacy algorithm.
+
+.. _coDistance:
+
+.. image:: ../images/computation/ccd_light.gif
+   :width: 25%
+   :align: right
+   :class: only-light
+
+.. image:: ../images/computation/ccd_dark.gif
+   :width: 25%
+   :align: right
+   :class: only-dark
+
+Geom distance
+^^^^^^^^^^^^^
+
+The narrow-phase collision functions described :ref:`above<coChecking>` drive the :ref:`mj_geomDistance` function and
+associated :ref:`collision-sensors`. Due to the limitations of MPR, the legacy pipeline will return incorrect values
+(top) except at very small distances relative to the geom sizes, and is discouraged for this use case. In
+contrast, the GJK-based native pipeline (bottom), computes the correct values at all distances.
+
+.. _coDecomposition:
+
+Convex decomposition
+^^^^^^^^^^^^^^^^^^^^
 
 In order to model a non-convex object other than a height field, the user must decompose it into a union of convex geoms
-(which can be primitive shapes or meshes) and attach them to the same body. Open tools like the `CoACD library
-<https://github.com/SarahWeiii/CoACD>`__ can be used outside MuJoCo to automate this process. Finally, all built-in
-collision functions can be replaced with custom callbacks. This can be used to incorporate a general-purpose "triangle
-soup" collision detector for example. However we do not recommend such an approach. Pre-processing the geometry and
-representing it as a union of convex geoms takes some work, but it pays off at runtime and yields both faster and more
-stable simulation.
+(which can be primitive shapes or meshes) and attach them to the same body. The other exception to this rule (besides
+height fields) are :ref:`Signed Distance Functions<exSDF>` (see documentation therein), which in certain cases (e.g.,
+`analytic SDFs <https://github.com/google-deepmind/mujoco/blob/main/plugin/sdf/README.md#gear>`__) can be efficient, but
+have other requirements and limitations.
+
+Open source mesh-decomposition tools like the `CoACD library <https://github.com/SarahWeiii/CoACD>`__ can be used
+outside MuJoCo to automate this process. Finally, all built-in collision functions can be replaced with custom
+callbacks. This can be used to incorporate a general-purpose "triangle soup" collision detector for example. However we
+do not recommend such an approach. Pre-processing the geometry and representing it as a union of convex geoms takes some
+work, but it pays off at runtime and yields both faster and more stable simulation.
 
 .. _Pipeline:
 
@@ -1597,14 +1718,15 @@ The stages below compute quantities that depend on the generalized positions ``m
 3. Compute the body inertias and joint axes, in global frames centered at the centers of mass of the corresponding
    kinematic subtrees: :ref:`mj_comPos`
 4. Compute quantities related to :ref:`flex<deformable-flex>` objects: :ref:`mj_flex`
-5. Compute the actuator lengths and moment arms: :ref:`mj_tendon`
-6. Compute the composite rigid body inertias and joint-space inertia matrix: :ref:`mj_crb`
+5. Compute the tendon lengths and moment arms. This includes the computation of minimal-length paths for spatial
+   tendons: :ref:`mj_tendon`
+6. Compute the composite rigid body inertias and joint-space inertia matrix: :ref:`mj_makeM`
 7. Compute the sparse factorization of the joint-space inertia matrix: :ref:`mj_factorM`
 8. Construct the list of active contacts. This includes both broad-phase and near-phase collision detection:
    :ref:`mj_collision`
-9. Construct the constraint Jacobian and compute the constraint residuals: :ref:`mj_makeConstraint`
-10. Compute the tendon lengths and moment arms. This includes the computation of minimal-length paths for spatial
-    tendons: :ref:`mj_transmission`
+9. Construct the constraint Jacobian, compute the constraint residuals, construct islands: :ref:`mj_makeConstraint`,
+   ``mj_island`` (not yet exposed in the API)
+10. Compute the actuator lengths and moment arms: :ref:`mj_transmission`
 11. Compute the matrices and vectors needed by the constraint solvers: :ref:`mj_projectConstraint`
 12. Compute sensor data that only depends on position, and the potential energy if enabled: :ref:`mj_sensorPos`,
     :ref:`mj_energyPos`
@@ -1722,20 +1844,23 @@ The top-level function :ref:`mj_inverse` invokes the following sequence of compu
 Derivatives
 -----------
 
-MuJoCo's entire computational pipline including its constraint solver are analytically differentiable. Writing
-efficient implementations of these derivatives is a long term goal of the development team. Analytic derivatives of the
-smooth dynamics (excluding constraints) with respect to velocity are already computed and enable the two
+MuJoCo's entire computational pipeline including its constraint solver are analytically differentiable in principle.
+Writing efficient implementations of these derivatives is a long term goal of the development team. Analytic derivatives
+of the smooth dynamics (excluding constraints) with respect to velocity are already computed and enable the two
 :ref:`implicit integrators<geIntegration>`.
+
+Note that the default value of the :ref:`solver impedance<CSolverImpedance>` is such that contacts are *not*
+differentiable by default, and needs to be :ref:`set to 0<solimp0>` in order for contact-force onset to be smooth.
 
 Two functions are currently available which use efficient finite-differencing in order to compute dynamics Jacobians:
 
 :ref:`mjd_transitionFD`:
   Computes state-transition and control-transition Jacobians for the discrete-time forward dynamics (:ref:`mj_step`).
-  See :ref:`API documentation<mjd_transitionFD>`.
+  See :ref:`documentation<mjd_transitionFD>`.
 
 :ref:`mjd_inverseFD`:
-  Computes Jacobians for the continuous-time inverse dynamics (:ref:`mj_inverse`).
-  See :ref:`API documentation<mjd_inverseFD>`.
+  Computes Jacobians for the continuous or discrete-time inverse dynamics (:ref:`mj_inverse`).
+  See :ref:`documentation<mjd_inverseFD>`.
 
 These derivatives are made efficient by exploiting MuJoCo's configurable computation pipeline so that quantities are not
 recomputed when not required. For example when differencing with respect to controls, quantities which depend only on

@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,6 @@
 #include <absl/strings/str_format.h>
 #include <mujoco/mjmodel.h>
 #include <mujoco/mujoco.h>
-#include "src/cc/array_safety.h"
 #include "test/fixture.h"
 
 namespace mujoco {
@@ -36,6 +36,7 @@ using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsNull;
 using ::testing::NotNull;
+using ::testing::Pointwise;
 
 static std::vector<mjtNum> GetRow(const mjtNum* array, int ncolumn, int row) {
   return std::vector<mjtNum>(array + ncolumn * row,
@@ -62,6 +63,233 @@ TEST_F(UserCModelTest, RepeatedNames) {
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
   EXPECT_THAT(model, IsNull());
   EXPECT_THAT(error.data(), HasSubstr("repeated name 'geom1' in geom"));
+}
+
+TEST_F(UserCModelTest, SameFrame) {
+  static constexpr char xml[] = R"(
+   <mujoco>
+     <default>
+      <geom type="box" size="1 2 3"/>
+     </default>
+
+     <worldbody>
+       <body name="body1">
+         <geom name="none"       mass="0" pos="1 1 1" euler="10 10 10"/>
+         <geom name="body"       mass="0"/>
+         <geom name="inertia"    mass="1" pos="3 2 1" euler="20 30 40"/>
+         <geom name="bodyrot"    mass="0" pos="1 1 1"/>
+         <geom name="inertiarot" mass="0" euler="20 30 40"/>
+        </body>
+      </worldbody>
+    </mujoco>)";
+
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_EQ(model->geom_sameframe[0], mjSAMEFRAME_NONE);
+  EXPECT_EQ(model->geom_sameframe[1], mjSAMEFRAME_BODY);
+  EXPECT_EQ(model->geom_sameframe[2], mjSAMEFRAME_INERTIA);
+  EXPECT_EQ(model->geom_sameframe[3], mjSAMEFRAME_BODYROT);
+  EXPECT_EQ(model->geom_sameframe[4], mjSAMEFRAME_INERTIAROT);
+
+  // make data, get geom_xpos
+  mjData* data = mj_makeData(model);
+  mj_kinematics(model, data);
+  auto geom_xpos = AsVector(data->geom_xpos, model->ngeom*3);
+  auto geom_xmat = AsVector(data->geom_xmat, model->ngeom*9);
+
+  // set all geom_sameframe to 0, call kinematics again
+  for (int i = 0; i < model->ngeom; i++) {
+    model->geom_sameframe[i] = mjSAMEFRAME_NONE;
+  }
+  mj_resetData(model, data);
+  mj_kinematics(model, data);
+  auto geom_xpos2 = AsVector(data->geom_xpos, model->ngeom*3);
+  auto geom_xmat2 = AsVector(data->geom_xmat, model->ngeom*9);
+
+  // expect them to be equal
+  constexpr double eps = 1e-6;
+  EXPECT_THAT(geom_xpos, Pointwise(DoubleNear(eps), geom_xpos2));
+  EXPECT_THAT(geom_xmat, Pointwise(DoubleNear(eps), geom_xmat2));
+
+  mj_deleteData(data);
+  mj_deleteModel(model);
+}
+
+TEST_F(UserCModelTest, ActuatorSparsity) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom size="1"/>
+        <joint name="a"/>
+        <body>
+          <geom size="1"/>
+          <joint name="b"/>
+        </body>
+      </body>
+    </worldbody>
+    <actuator>
+      <motor joint="a"/>
+      <motor joint="b"/>
+    </actuator>
+  </mujoco>
+  )";
+  mjModel* m = LoadModelFromString(xml);
+  ASSERT_EQ(m->nJmom, 2);
+  mj_deleteModel(m);
+}
+
+TEST_F(UserCModelTest, NestedZeroMassBodiesOK) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <freejoint/>
+        <body>
+          <body>
+            <body>
+              <geom size="1"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  mj_deleteModel(model);
+}
+
+TEST_F(UserCModelTest, NestedZeroMassBodiesWithJointOK) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <freejoint/>
+        <body>
+          <body>
+            <body>
+              <joint/>
+              <geom size="1"/>
+            </body>
+            <body>
+              <geom size="1"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  mj_deleteModel(model);
+}
+
+TEST_F(UserCModelTest, NestedZeroMassBodiesFail) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom size="1"/>
+        <body name="bad">
+          <freejoint/>
+          <body>
+            <body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, IsNull());
+  EXPECT_THAT(
+      error,
+      HasSubstr(
+          "mass and inertia of moving bodies must be larger than mjMINVAL"));
+  EXPECT_THAT(error, HasSubstr("Element name 'bad'"));
+  mj_deleteModel(model);
+}
+
+TEST_F(UserCModelTest, ConvexHullForCollisionMeshes) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="mesh_no_hull" vertex="0 0 0  1 0 0  0 1 0  0 0 1"
+            face="0 2 1  0 1 3  0 3 2  1 2 3"/>
+      <mesh name="mesh_with_hull_contype" vertex="0 0 0  1 0 0  0 1 0  0 0 1"
+            face="0 2 1  0 1 3  0 3 2  1 2 3"/>
+      <mesh name="mesh_with_hull_conaffinity" vertex="0 0 0  1 0 0  0 1 0  0 0 1"
+            face="0 2 1  0 1 3  0 3 2  1 2 3"/>
+    </asset>
+    <worldbody>
+      <geom name="geom_no_hull" type="mesh" mesh="mesh_no_hull" contype="0" conaffinity="0"/>
+      <geom name="geom_with_hull_contype" type="mesh" mesh="mesh_with_hull_contype" contype="1"/>
+      <geom name="geom_with_hull_conaffinity" type="mesh" mesh="mesh_with_hull_conaffinity" conaffinity="1"/>
+    </worldbody>
+  </mujoco>)";
+
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+
+  int no_hull_id = mj_name2id(model, mjOBJ_MESH, "mesh_no_hull");
+  int with_hull_contype_id =
+      mj_name2id(model, mjOBJ_MESH, "mesh_with_hull_contype");
+  int with_hull_conaffinity_id =
+      mj_name2id(model, mjOBJ_MESH, "mesh_with_hull_conaffinity");
+
+  EXPECT_NE(no_hull_id, -1);
+  EXPECT_NE(with_hull_contype_id, -1);
+  EXPECT_NE(with_hull_conaffinity_id, -1);
+
+  // mesh_no_hull should not have a convex hull.
+  EXPECT_EQ(model->mesh_graphadr[no_hull_id], -1);
+
+  // mesh_with_hull_contype should have a convex hull.
+  EXPECT_NE(model->mesh_graphadr[with_hull_contype_id], -1);
+
+  // mesh_with_hull_conaffinity should have a convex hull.
+  EXPECT_NE(model->mesh_graphadr[with_hull_conaffinity_id], -1);
+
+  mj_deleteModel(model);
+}
+
+TEST_F(UserCModelTest, ConvexHullForPairCollisionMeshes) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="mesh" vertex="0 0 0  1 0 0  0 1 0  0 0 1"
+            face="0 2 1  0 1 3  0 3 2  1 2 3"/>
+    </asset>
+    <worldbody>
+      <geom name="geom1" type="sphere" size="1"/>
+      <geom name="geom_mesh" type="mesh" mesh="mesh" contype="0" conaffinity="0"/>
+    </worldbody>
+    <contact>
+      <pair name="hello" geom1="geom1" geom2="geom_mesh"/>
+    </contact>
+  </mujoco>)";
+
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+
+  int mesh_in_pair_id = mj_name2id(model, mjOBJ_MESH, "mesh");
+
+  EXPECT_NE(mesh_in_pair_id, -1);
+
+  // mesh_in_pair should have a convex hull because it is in a collision pair.
+  EXPECT_NE(model->mesh_graphadr[mesh_in_pair_id], -1);
+
+  mj_deleteModel(model);
 }
 
 // ------------- test automatic inference of nuser_xxx -------------------------
@@ -222,22 +450,14 @@ TEST_F(UserDataTest, AutoNUserSensor) {
 
 // ------------- test duplicate names ------------------------------------------
 TEST_F(UserDataTest, DuplicateNames) {
-  static const char* const kFilePath = "user/testdata/load_twice.xml";
+  static const char* const kFilePath = "user/testdata/malformed_duplicated.xml";
   const std::string xml_path = GetTestDataFilePath(kFilePath);
 
   std::array<char, 1024> error;
   mjModel* m = mj_loadXML(xml_path.c_str(), 0, error.data(), error.size());
 
-  EXPECT_THAT(m, NotNull()) << error.data();
-  EXPECT_THAT(m->nmesh, 2);
-
-  for (int i = 0; i < m->nmesh; i++) {
-    char mesh_name[mjMAXUINAME] = "";
-    util::strcat_arr(mesh_name, m->names + m->name_meshadr[i]);
-    EXPECT_THAT(std::string(mesh_name), "cube_" + std::to_string(i));
-  }
-
-  mj_deleteModel(m);
+  EXPECT_THAT(m, IsNull());
+  EXPECT_STREQ(error.data(), "Error: repeated name 'cube' in mesh");
 }
 
 // ------------- test fusestatic -----------------------------------------------
@@ -293,6 +513,100 @@ TEST_F(FuseStaticTest, FuseStaticEquivalent) {
   mj_deleteData(d_no_fuse);
   mj_deleteModel(m_fuse);
   mj_deleteModel(m_no_fuse);
+}
+
+TEST_F(FuseStaticTest, FuseStaticActuatorReferencedBody) {
+  static constexpr char xml_template[] = R"(
+  <mujoco>
+    <compiler fusestatic="true"/>
+
+    <worldbody>
+      <body>
+        <joint axis="1 0 0"/>
+        <geom size="0.5" pos="1 0 0" contype="0" conaffinity="0"/>
+        <body name="not_referenced">
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+        <body name="referenced">
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+      </body>
+    </worldbody>
+
+    <actuator>
+      <adhesion body="referenced" ctrlrange="0 1"/>
+    </actuator>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml_template, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+  EXPECT_EQ(m->nbody, 3) << "Expecting a world body and two others";
+  mj_deleteModel(m);
+}
+
+TEST_F(FuseStaticTest, FuseStaticLightReferencedBody) {
+  static constexpr char xml_template[] = R"(
+  <mujoco>
+    <compiler fusestatic="true"/>
+
+    <worldbody>
+      <light mode="targetbody" target="referenced"/>
+      <body>
+        <joint axis="1 0 0"/>
+        <geom size="0.5" pos="1 0 0" contype="0" conaffinity="0"/>
+        <body name="not_referenced">
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+        <body name="referenced">
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml_template, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+  EXPECT_EQ(m->nbody, 3) << "Expecting a world body and two others";
+  mj_deleteModel(m);
+}
+
+TEST_F(FuseStaticTest, FuseStaticForceSensorReferencedBody) {
+  static constexpr char xml_template[] = R"(
+  <mujoco>
+    <compiler fusestatic="true"/>
+
+    <worldbody>
+      <body>
+        <joint axis="1 0 0"/>
+        <geom size="0.5" pos="1 0 0" contype="0" conaffinity="0"/>
+        <body name="not_referenced">
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+        <body name="referenced">
+          <site name="force"/>
+          <geom size="0.5" pos="0 1 0" contype="1" conaffinity="1"/>
+          <geom size="0.5" pos="0 -2 0" contype="1" conaffinity="1"/>
+        </body>
+      </body>
+    </worldbody>
+
+    <sensor>
+      <force site="force"/>
+    </sensor>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml_template, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+  EXPECT_EQ(m->nbody, 3) << "Expecting a world body and two others";
+  mj_deleteModel(m);
 }
 
 // ------------- test discardvisual --------------------------------------------
@@ -430,8 +744,8 @@ TEST_F(LengthRangeTest, LengthRangeThreading) {
               DoubleNear(std::sqrt(5.0), 1e-3));
 
   // recompile without threads
-  ASSERT_EQ(spec->usethread, 1);
-  spec->usethread = 0;
+  ASSERT_EQ(spec->compiler.usethread, 1);
+  spec->compiler.usethread = 0;
   mjModel* model2 = mj_compile(spec, 0);
   EXPECT_THAT(model2, NotNull()) << error;
 
@@ -443,6 +757,163 @@ TEST_F(LengthRangeTest, LengthRangeThreading) {
   mj_deleteModel(model1);
   mj_deleteModel(model2);
   mj_deleteSpec(spec);
+}
+
+// ----------------------------- test modeldir  --------------------------------
+
+TEST_F(MujocoTest, Modeldir) {
+  static constexpr char cube[] = R"(
+  v -1 -1  1
+  v  1 -1  1
+  v -1  1  1
+  v  1  1  1
+  v -1  1 -1
+  v  1  1 -1
+  v -1 -1 -1
+  v  1 -1 -1)";
+
+  auto vfs = std::make_unique<mjVFS>();
+  mj_defaultVFS(vfs.get());
+  mj_addBufferVFS(vfs.get(), "meshdir/cube.obj", cube, sizeof(cube));
+
+  // child with the asset
+  mjSpec* child = mj_makeSpec();
+  mjsMesh* mesh = mjs_addMesh(child, 0);
+  mjsFrame* frame = mjs_addFrame(mjs_findBody(child, "world"), 0);
+  mjsGeom* geom = mjs_addGeom(mjs_findBody(child, "world"), 0);
+  mjs_setString(child->compiler.meshdir, "meshdir");
+  mjs_setString(mesh->file, "cube.obj");
+  mjs_setName(mesh->element, "cube");
+  mjs_setString(geom->meshname, "cube");
+  mjs_setFrame(geom->element, frame);
+  geom->type = mjGEOM_MESH;
+
+  // parent attaching the child
+  mjSpec* spec = mj_makeSpec();
+  mjs_setDeepCopy(spec, true);
+  mjs_setString(spec->compiler.meshdir, "asset");
+  mjs_attach(mjs_findBody(spec, "world")->element, frame->element, "_", "");
+  mjModel* model = mj_compile(spec, vfs.get());
+  EXPECT_THAT(model, NotNull());
+
+  mj_deleteSpec(child);
+  mj_deleteSpec(spec);
+  mj_deleteModel(model);
+  mj_deleteVFS(vfs.get());
+}
+
+TEST_F(MujocoTest, NestedMeshDir) {
+  static constexpr char cube[] = R"(
+  v -1 -1  1
+  v  1 -1  1
+  v -1  1  1
+  v  1  1  1
+  v -1  1 -1
+  v  1  1 -1
+  v -1 -1 -1
+  v  1 -1 -1)";
+
+  static constexpr char child_xml[] = R"(
+  <mujoco>
+    <compiler meshdir="child_meshdir"/>
+
+    <asset>
+      <mesh name="m" file="child_mesh.obj"/>
+    </asset>
+
+    <worldbody>
+      <body name="child">
+        <geom type="mesh" mesh="m"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+
+  static constexpr char parent_xml[] = R"(
+  <mujoco>
+    <compiler meshdir="parent_meshdir"/>
+
+    <asset>
+      <mesh name="m" file="parent_mesh.obj"/>
+      <model name="child" file="child.xml"/>
+    </asset>
+
+    <worldbody>
+      <body name="parent">
+        <geom type="mesh" mesh="m"/>
+        <attach model="child" body="child" prefix="child_"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+
+  static constexpr char grandparent_xml[] = R"(
+  <mujoco>
+    <compiler meshdir="grandparent_meshdir"/>
+
+    <asset>
+      <mesh name="m" file="grandparent_mesh.obj"/>
+      <model name="parent" file="parent.xml"/>
+    </asset>
+
+    <worldbody>
+      <geom type="mesh" mesh="m"/>
+      <attach model="parent" body="parent" prefix="parent_"/>
+    </worldbody>
+  </mujoco>
+  )";
+
+  auto vfs = std::make_unique<mjVFS>();
+  mj_defaultVFS(vfs.get());
+  mj_addBufferVFS(vfs.get(), "child_meshdir/child_mesh.obj", cube,
+                  sizeof(cube));
+  mj_addBufferVFS(vfs.get(), "child.xml", child_xml, sizeof(child_xml));
+  mj_addBufferVFS(vfs.get(), "parent_meshdir/parent_mesh.obj", cube,
+                  sizeof(cube));
+  mj_addBufferVFS(vfs.get(), "parent.xml", parent_xml, sizeof(parent_xml));
+  mj_addBufferVFS(vfs.get(), "grandparent_meshdir/grandparent_mesh.obj", cube,
+                  sizeof(cube));
+
+  std::array<char, 1024> error;
+  mjModel* child_model = LoadModelFromString(child_xml, error.data(),
+                                             error.size(), vfs.get());
+  EXPECT_THAT(child_model, NotNull()) << error.data();
+  mj_deleteModel(child_model);
+
+  mjModel* parent_model = LoadModelFromString(parent_xml, error.data(),
+                                              error.size(), vfs.get());
+  EXPECT_THAT(parent_model, NotNull()) << error.data();
+  mj_deleteModel(parent_model);
+
+  mjModel* grandparent_model = LoadModelFromString(
+      grandparent_xml, error.data(), error.size(), vfs.get());
+  EXPECT_THAT(grandparent_model, NotNull()) << error.data();
+  mj_deleteModel(grandparent_model);
+
+  mj_deleteVFS(vfs.get());
+}
+
+TEST_F(MujocoTest, ConvertSpringdamper) {
+  static constexpr char xml[] = R"(
+    <mujoco>
+    <worldbody>
+      <body>
+        <joint axis="0 1 0" springdamper="1 1"/>
+        <geom size="0.2 0.2 0.2" type="box"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1024> err;
+  mjSpec* spec = mj_parseXMLString(xml, 0, err.data(), err.size());
+  ASSERT_THAT(spec, NotNull()) << err.data();
+  mjModel* model = mj_compile(spec, 0);
+  ASSERT_THAT(model, NotNull()) << err.data();
+  std::array<char, 1024> str;
+  mj_saveXMLString(spec, str.data(), str.size(), err.data(), err.size());
+  EXPECT_THAT(str.data(), HasSubstr("damping"));
+  EXPECT_THAT(str.data(), HasSubstr("stiffness"));
+  mj_deleteModel(model);
 }
 
 }  // namespace

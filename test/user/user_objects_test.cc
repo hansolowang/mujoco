@@ -20,7 +20,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -32,14 +31,15 @@
 namespace mujoco {
 namespace {
 
-std::vector<mjtNum> AsVector(const mjtNum* array, int n) {
-  return std::vector<mjtNum>(array, array + n);
-}
+constexpr double kInertiaTol = 1e-6;
 
+using std::string;
+using ::testing::DoubleNear;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsNull;
 using ::testing::NotNull;
+using ::testing::Pointwise;
 
 // -------------------- test OS filesystem fallback ----------------------------
 
@@ -68,8 +68,7 @@ TEST_F(VfsTest, HFieldPngWithVFS) {
   // should fallback to OS filesystem
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -96,8 +95,7 @@ TEST_F(VfsTest, HFieldCustomWithVFS) {
   // should fallback to OS filesystem
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -125,8 +123,7 @@ TEST_F(VfsTest, TexturePngWithVFS) {
   // should fallback to OS filesystem
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -154,8 +151,7 @@ TEST_F(VfsTest, TextureCustomWithVFS) {
   // should fallback to OS filesystem
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -187,8 +183,7 @@ TEST_F(ContentTypeTest, HFieldPngWithContentType) {
   // should try loading the file
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -216,8 +211,7 @@ TEST_F(ContentTypeTest, HFieldCustomWithContentType) {
   // should try loading the file
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -273,8 +267,7 @@ TEST_F(ContentTypeTest, TexturePngWithContentType) {
   // should try loading the file
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -303,8 +296,7 @@ TEST_F(ContentTypeTest, TextureCustomWithContentType) {
   // should try loading the file
   mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error,
-              HasSubstr("Error opening file"));
+  EXPECT_THAT(error, HasSubstr("Error opening file"));
   mj_deleteVFS(vfs.get());
 }
 
@@ -369,7 +361,6 @@ TEST_F(ContentTypeTest, TextureLoadPng) {
   char error[1024];
   size_t error_sz = 1024;
 
-
   // load VFS on the heap
   auto vfs = std::make_unique<mjVFS>();
   mj_defaultVFS(vfs.get());
@@ -390,7 +381,7 @@ using KeyframeTest = MujocoTest;
 constexpr char kKeyframePath[] = "user/testdata/keyframe.xml";
 
 TEST_F(KeyframeTest, CheckValues) {
-  const std::string xml_path = GetTestDataFilePath(kKeyframePath);
+  const string xml_path = GetTestDataFilePath(kKeyframePath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, nullptr, 0);
   ASSERT_THAT(model, NotNull());
   EXPECT_EQ(model->nkey, 7);
@@ -398,17 +389,17 @@ TEST_F(KeyframeTest, CheckValues) {
   EXPECT_EQ(model->key_qpos[1 * model->nq], 0.2);
   EXPECT_EQ(model->key_qvel[2 * model->nv], 0.3);
   EXPECT_EQ(model->key_act[3 * model->na], 0.4);
-  EXPECT_THAT(AsVector(model->key_ctrl + 4*model->nu, model->nu),
+  EXPECT_THAT(AsVector(model->key_ctrl + 4 * model->nu, model->nu),
               ElementsAre(0.5, 0.6));
-  EXPECT_THAT(AsVector(model->key_mpos + 3*model->nmocap*5, 3),
+  EXPECT_THAT(AsVector(model->key_mpos + 3 * model->nmocap * 5, 3),
               ElementsAre(.1, .2, .3));
-  EXPECT_THAT(AsVector(model->key_mquat + 4*model->nmocap*6, 4),
+  EXPECT_THAT(AsVector(model->key_mquat + 4 * model->nmocap * 6, 4),
               ElementsAre(.5, .5, .5, .5));
   mj_deleteModel(model);
 }
 
 TEST_F(KeyframeTest, ResetDataKeyframe) {
-  const std::string xml_path = GetTestDataFilePath(kKeyframePath);
+  const string xml_path = GetTestDataFilePath(kKeyframePath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, nullptr, 0);
   ASSERT_THAT(model, NotNull());
   mjData* data = mj_makeData(model);
@@ -440,7 +431,7 @@ TEST_F(KeyframeTest, ResetDataKeyframe) {
 }
 
 TEST_F(KeyframeTest, ResetDataKeyframeAcceptsNegativeKeyframe) {
-  const std::string xml_path = GetTestDataFilePath(kKeyframePath);
+  const string xml_path = GetTestDataFilePath(kKeyframePath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, nullptr, 0);
   ASSERT_THAT(model, NotNull());
   mjData* data = mj_makeData(model);
@@ -473,7 +464,7 @@ TEST_F(KeyframeTest, BadSize) {
   size_t error_sz = 1024;
   mjModel* model = LoadModelFromString(xml, error, error_sz);
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error, HasSubstr("invalid qpos size, expected length 0"));
+  EXPECT_THAT(error, HasSubstr("invalid qpos size, expected 0, got 1"));
 }
 
 // ------------- test relative frame sensor compilation-------------------------
@@ -607,9 +598,7 @@ TEST_F(RelativeFrameSensorParsingTest, BadObjRefName) {
   std::array<char, 1024> error;
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
   ASSERT_THAT(model, IsNull());
-  EXPECT_THAT(
-      error.data(),
-      HasSubstr("unrecognized name 'alessio' of object"));
+  EXPECT_THAT(error.data(), HasSubstr("unrecognized name 'alessio' of object"));
   EXPECT_THAT(error.data(), HasSubstr("name 'tom'"));
   EXPECT_THAT(error.data(), HasSubstr("line 7"));
 }
@@ -648,7 +637,7 @@ static constexpr int kSphereBodyId = 1, kCylinderBodyId = 2,
                      kCapsuleBodyId = 3, kCapsuleGeomId = 2;
 
 TEST_F(MjCGeomTest, CapsuleMass) {
-  const std::string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
+  const string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, 0, 0);
   // Mass of capsule should equal mass of cylinder + mass of sphere.
   mjtNum sphere_cylinder_mass =
@@ -659,45 +648,419 @@ TEST_F(MjCGeomTest, CapsuleMass) {
 }
 
 TEST_F(MjCGeomTest, CapsuleInertiaZ) {
-  const std::string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
+  const string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, 0, 0);
   // z-inertia of capsule should equal sphere + cylinder z-inertia.
   mjtNum sphere_cylinder_z_inertia =
-      model->body_inertia[3*kSphereBodyId + 2] +
-      model->body_inertia[3*kCylinderBodyId + 2];
-  mjtNum capsule_z_inertia = model->body_inertia[3*kCapsuleBodyId + 2];
+      model->body_inertia[3 * kSphereBodyId + 2] +
+      model->body_inertia[3 * kCylinderBodyId + 2];
+  mjtNum capsule_z_inertia = model->body_inertia[3 * kCapsuleBodyId + 2];
   EXPECT_DOUBLE_EQ(sphere_cylinder_z_inertia, capsule_z_inertia);
   mj_deleteModel(model);
 }
 
 TEST_F(MjCGeomTest, CapsuleInertiaX) {
-  const std::string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
+  const string xml_path = GetTestDataFilePath(kCapsuleInertiaPath);
   mjModel* model = mj_loadXML(xml_path.c_str(), nullptr, 0, 0);
 
   // The CoM of a solid hemisphere is 3/8*radius away from from the disk.
-  mjtNum hs_com = model->geom_size[3*kCapsuleGeomId] * 3 / 8;
+  mjtNum hs_com = model->geom_size[3 * kCapsuleGeomId] * 3 / 8;
 
   // The mass of the two hemispherical end-caps is just the mass of the sphere.
   mjtNum sphere_mass = model->body_mass[1];
 
   // x-inertia of capsule should equal sphere + cylinder x-inertias, with
   // corrections from shifting the hemispheres using parallel axis theorem.
-  mjtNum sphere_cylinder_x_inertia = model->body_inertia[3*kSphereBodyId] +
-                                     model->body_inertia[3*kCylinderBodyId];
+  mjtNum sphere_cylinder_x_inertia = model->body_inertia[3 * kSphereBodyId] +
+                                     model->body_inertia[3 * kCylinderBodyId];
 
   // Parallel axis-theorem #1: translate the hemispheres in to the origin.
   mjtNum translate_in = hs_com;
-  sphere_cylinder_x_inertia -= sphere_mass * translate_in*translate_in;
+  sphere_cylinder_x_inertia -= sphere_mass * translate_in * translate_in;
 
   // Parallel axis-theorem #2: translate the hemispheres out to the end caps.
-  mjtNum cylinder_half_length = model->geom_size[3*kCapsuleGeomId + 1];
+  mjtNum cylinder_half_length = model->geom_size[3 * kCapsuleGeomId + 1];
   mjtNum translate_out = cylinder_half_length + hs_com;
-  sphere_cylinder_x_inertia += sphere_mass * translate_out*translate_out;
+  sphere_cylinder_x_inertia += sphere_mass * translate_out * translate_out;
 
   // Compare native capsule inertia and computed inertia.
-  mjtNum capsule_x_inertia = model->body_inertia[3*kCapsuleBodyId];
+  mjtNum capsule_x_inertia = model->body_inertia[3 * kCapsuleBodyId];
   EXPECT_DOUBLE_EQ(sphere_cylinder_x_inertia, capsule_x_inertia);
   mj_deleteModel(model);
+}
+
+TEST_F(MjCGeomTest, ShellInertiaSphere) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom type="sphere"size="1.5" shellinertia="true"/>
+      </body>
+      <body>
+        <!-- mass is difference of body 4 and 3 masses -->
+        <geom type="sphere" size="1.5" mass="28.274333953857422" shellinertia="true"/>
+      </body>
+      <body>
+        <geom type="sphere" size="1.5" density="1e8"/>
+      </body>
+      <body>
+        <geom type="sphere" size="1.50000001" density="1e8"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1000> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+
+  // radius
+  mjtNum r = 1.5;
+  mjtNum r2 = r * r;
+
+  // body 1: shell inertia
+  mjtNum mass1 = 4 * mjPI * r2 * 1000;  // surface area * surface density
+  EXPECT_NEAR(m->body_mass[1], mass1, kInertiaTol);
+  mjtNum I1 = 2 * mass1 * r2 / 3;
+  EXPECT_NEAR(m->body_inertia[3], I1, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[4], I1, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[5], I1, kInertiaTol);
+
+  // body 2: shell inertia, with specified mass
+  mjtNum I2 = 2 * m->body_mass[2] * r2 / 3;
+  EXPECT_NEAR(m->body_inertia[6], I2, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[7], I2, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[8], I2, kInertiaTol);
+
+  mjtNum mass3 = m->body_mass[3];
+  mjtNum mass4 = m->body_mass[4];
+  EXPECT_FLOAT_EQ(mass4 - mass3, m->body_mass[2]);
+
+  // compute approximate shell inertia by subtracting inertias of massive bodies
+  // with small radius difference
+  mjtNum* inertia3 = m->body_inertia + 9;
+  mjtNum* inertia4 = m->body_inertia + 12;
+  mjtNum shell_inertia[3];
+  mju_sub3(shell_inertia, inertia4, inertia3);
+  EXPECT_NEAR(shell_inertia[0], m->body_inertia[6], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[1], m->body_inertia[7], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[2], m->body_inertia[8], kInertiaTol);
+
+  mj_deleteModel(m);
+}
+
+TEST_F(MjCGeomTest, ShellInertiaCapsule) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom type="capsule" size="0.1 0.25" shellinertia="true"/>
+      </body>
+      <!-- mass is difference of body 4 and 3 masses -->
+      <body>
+        <geom type="capsule" size="0.1 0.25" mass="4.3982325" shellinertia="true"/>
+      </body>
+      <body>
+        <geom type="capsule" size="0.1 0.25" density="1e8"/>
+      </body>
+      <body>
+        <geom type="capsule" size="0.1000001 0.25" density="1e8"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1000> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+
+  // dimensions
+  mjtNum r = 0.1;
+  mjtNum r2 = r * r;
+  mjtNum hh = 0.25;
+  mjtNum h = 2 * hh;
+  mjtNum h2 = h * h;
+
+  // hemisphere
+  mjtNum hs_com = r / 2;        // height of hemisphere center of mass
+  mjtNum hs_pos = hh + hs_com;  // distance from origin to hemisphere com
+
+  // surface area
+  double Asphere = 4 * mjPI * r2;       // sphere
+  double Acylinder = 2 * mjPI * r * h;  // cylinder
+  double Atotal = Asphere + Acylinder;
+
+  // body 1: shell inertia
+  mjtNum mass1 = Atotal * 1000;  // surface area * surface density
+  EXPECT_NEAR(m->body_mass[1], mass1, kInertiaTol);
+  mjtNum mass1_sphere = mass1 * Asphere / Atotal;
+  mjtNum mass1_cylinder = mass1 - mass1_sphere;
+  double sphere1_inertia = 2 * mass1_sphere * r2 / 3;
+  mjtNum I1x = mass1_cylinder * (6 * r2 + h2) / 12 + sphere1_inertia +
+               mass1_sphere * (hs_pos * hs_pos - hs_com * hs_com);
+  mjtNum I1z = mass1_cylinder * r2 + sphere1_inertia;
+  EXPECT_NEAR(m->body_inertia[3], I1x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[4], I1x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[5], I1z, kInertiaTol);
+
+  // body 2: shell inertia, with specified mass
+  mjtNum mass2 = 4.3982325;
+  EXPECT_NEAR(m->body_mass[2], mass2, kInertiaTol);
+  EXPECT_FLOAT_EQ(m->body_mass[4] - m->body_mass[3], m->body_mass[2]);
+
+  mjtNum mass2_sphere = mass2 * Asphere / Atotal;
+  mjtNum mass2_cylinder = mass2 - mass2_sphere;
+  double sphere2_inertia = 2 * mass2_sphere * r2 / 3;
+  mjtNum I2x = mass2_cylinder * (6 * r2 + h2) / 12 + sphere2_inertia +
+               mass2_sphere * (hs_pos * hs_pos - hs_com * hs_com);
+  mjtNum I2z = mass2_cylinder * r2 + sphere2_inertia;
+  EXPECT_NEAR(m->body_inertia[6], I2x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[7], I2x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[8], I2z, kInertiaTol);
+
+  // compute approximate shell inertia by subtracting inertias of massive bodies
+  // with small radius difference
+  mjtNum* inertia3 = m->body_inertia + 9;
+  mjtNum* inertia4 = m->body_inertia + 12;
+  mjtNum shell_inertia[3];
+  mju_sub3(shell_inertia, inertia4, inertia3);
+  EXPECT_NEAR(shell_inertia[0], m->body_inertia[6], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[1], m->body_inertia[7], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[2], m->body_inertia[8], kInertiaTol);
+
+  mj_deleteModel(m);
+}
+
+TEST_F(MjCGeomTest, ShellInertiaCylinder) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom type="cylinder" size="0.1 0.25" shellinertia="true"/>
+      </body>
+      <!-- mass is difference of body 4 and 3 masses -->
+      <body>
+        <geom type="cylinder" size="0.1 0.25" mass="3.7699139" shellinertia="true"/>
+      </body>
+      <body>
+        <geom type="cylinder" size="0.1 0.25" density="1e8"/>
+      </body>
+      <body>
+        <geom type="cylinder" size="0.1000001 0.2500001" density="1e8"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1000> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+
+  // dimensions
+  mjtNum r = 0.1;
+  mjtNum hh = 0.25;
+  mjtNum r2 = r * r;
+  mjtNum h = 2 * hh;
+  mjtNum h2 = h * h;
+
+  // surface area
+  double Adisk = mjPI * r2;             // disk
+  double Acylinder = 2 * mjPI * r * h;  // cylinder
+  double Atotal = 2 * Adisk + Acylinder;
+
+  // body 1: shell inertia
+  mjtNum mass1 = Atotal * 1000;  // surface area * surface density
+  EXPECT_NEAR(m->body_mass[1], mass1, kInertiaTol);
+  mjtNum mass1_disk = mass1 * Adisk / Atotal;
+  mjtNum mass1_cylinder = mass1 - 2 * mass1_disk;
+  mjtNum I1x = mass1_cylinder * (6 * r2 + h2) / 12 +
+               2 * (mass1_disk * r2 / 4 + mass1_disk * hh * hh);
+  mjtNum I1z = mass1_cylinder * r2 + mass1_disk * r2;
+  EXPECT_NEAR(m->body_inertia[3], I1x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[4], I1x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[5], I1z, kInertiaTol);
+
+  // body 2: shell inertia, with specified mass
+  mjtNum mass2 = 3.7699139;
+  EXPECT_NEAR(m->body_mass[2], mass2, kInertiaTol);
+  EXPECT_FLOAT_EQ(m->body_mass[4] - m->body_mass[3], m->body_mass[2]);
+
+  mjtNum mass2_disk = mass2 * Adisk / Atotal;
+  mjtNum mass2_cylinder = mass2 - 2 * mass2_disk;
+  mjtNum I2x = mass2_cylinder * (6 * r2 + h2) / 12 +
+               2 * (mass2_disk * r2 / 4 + mass2_disk * hh * hh);
+  mjtNum I2z = mass2_cylinder * r2 + mass2_disk * r2;
+  EXPECT_NEAR(m->body_inertia[6], I2x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[7], I2x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[8], I2z, kInertiaTol);
+
+  // compute approximate shell inertia by subtracting inertias of massive bodies
+  // with small radius difference
+  mjtNum* inertia3 = m->body_inertia + 9;
+  mjtNum* inertia4 = m->body_inertia + 12;
+  mjtNum shell_inertia[3];
+  mju_sub3(shell_inertia, inertia4, inertia3);
+  EXPECT_NEAR(shell_inertia[0], m->body_inertia[6], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[1], m->body_inertia[7], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[2], m->body_inertia[8], kInertiaTol);
+
+  mj_deleteModel(m);
+}
+
+TEST_F(MjCGeomTest, ShellInertiaEllipsoid) {
+  // test special case of ellipsoid with dimensions: a = b = c
+  // TODO(taylorhowell): add test for ellipsoid with dimensions: a != b != c
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom type="ellipsoid" size="0.1 0.1 0.1" shellinertia="true"/>
+      </body>
+      <body>
+        <!-- mass is difference of body 4 and 3 masses -->
+        <geom type="ellipsoid" size="0.1 0.1 0.1" mass="0.12566371" shellinertia="true"/>
+      </body>
+      <body>
+        <geom type="ellipsoid" size="0.1 0.1 0.1" density="1e8"/>
+      </body>
+      <body>
+        <geom type="ellipsoid" size="0.10000001 0.10000001 0.10000001" density="1e8"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1000> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+
+  // dimensions
+  mjtNum r = 0.1;
+  mjtNum r2 = r * r;
+
+  // body 1: shell inertia
+  mjtNum mass1 = 4 * mjPI * r2 * 1000;  // surface area * surface density
+  EXPECT_NEAR(m->body_mass[1], mass1, kInertiaTol);
+  mjtNum I1 = 2 * mass1 * r2 / 3;
+
+  // note: increased tolerance, this is due to ellipsoid approximation
+  EXPECT_NEAR(m->body_inertia[3], I1, 10 * kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[4], I1, 10 * kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[5], I1, 10 * kInertiaTol);
+
+  // body 2: shell inertia, with specified mass
+  mjtNum mass2 = 0.12566371;
+  EXPECT_NEAR(m->body_mass[2], mass2, kInertiaTol);
+  EXPECT_FLOAT_EQ(m->body_mass[4] - m->body_mass[3], m->body_mass[2]);
+
+  mjtNum I2 = 2 * m->body_mass[2] * r2 / 3;
+  EXPECT_NEAR(m->body_inertia[6], I2, 10 * kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[7], I2, 10 * kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[8], I2, 10 * kInertiaTol);
+
+  // compute approximate shell inertia by subtracting inertias of massive bodies
+  // with small radius difference
+  mjtNum* inertia3 = m->body_inertia + 9;
+  mjtNum* inertia4 = m->body_inertia + 12;
+  mjtNum shell_inertia[3];
+  mju_sub3(shell_inertia, inertia4, inertia3);
+  EXPECT_NEAR(shell_inertia[0], m->body_inertia[6], 10 * kInertiaTol);
+  EXPECT_NEAR(shell_inertia[1], m->body_inertia[7], 10 * kInertiaTol);
+  EXPECT_NEAR(shell_inertia[2], m->body_inertia[8], 10 * kInertiaTol);
+
+  mj_deleteModel(m);
+}
+
+TEST_F(MjCGeomTest, ShellInertiaBox) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom type="box" size="0.1 0.2 0.3" shellinertia="true"/>
+      </body>
+      <!-- mass is difference of body 4 and 3 masses -->
+      <body>
+        <geom type="box" size="0.1 0.2 0.3" mass="8.800005" shellinertia="true"/>
+      </body>
+      <body>
+        <geom type="box" size="0.1 0.2 0.3" density="1e8"/>
+      </body>
+      <body>
+        <geom type="box" size="0.1000001 0.2000001 0.3000001" density="1e8"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1000> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+
+  // dimensions
+  mjtNum dx = 0.1;
+  mjtNum dy = 0.2;
+  mjtNum dz = 0.3;
+
+  // length
+  mjtNum lx = 2 * dx;
+  mjtNum ly = 2 * dy;
+  mjtNum lz = 2 * dz;
+
+  // surface area
+  double A0 = lx * ly;
+  double A1 = ly * lz;
+  double A2 = lz * lx;
+  double Atotal = 2 * (A0 + A1 + A2);
+
+  // body 1: shell inertia
+  mjtNum mass1 = Atotal * 1000;  // surface area * surface density
+  EXPECT_NEAR(m->body_mass[1], mass1, kInertiaTol);
+
+  mjtNum mass1_0 = mass1 * A0 / Atotal;
+  mjtNum mass1_1 = mass1 * A1 / Atotal;
+  mjtNum mass1_2 = mass1 * A2 / Atotal;
+  mjtNum I1x = 2 * (mass1_0 * ly * ly / 12 + mass1_0 * dz * dz +
+                    mass1_1 * (ly * ly + lz * lz) / 12 +
+                    mass1_2 * lz * lz / 12 + mass1_2 * dy * dy);
+  mjtNum I1y =
+      2 * (mass1_0 * lx * lx / 12 + mass1_0 * dz * dz + mass1_1 * lz * lz / 12 +
+           mass1_1 * dx * dx + mass1_2 * (lx * lx + lz * lz) / 12);
+  mjtNum I1z =
+      2 * (mass1_0 * (lx * lx + ly * ly) / 12 + mass1_1 * ly * ly / 12 +
+           mass1_1 * dx * dx + mass1_2 * lx * lx / 12 + mass1_2 * dy * dy);
+
+  EXPECT_NEAR(m->body_inertia[3], I1x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[4], I1y, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[5], I1z, kInertiaTol);
+
+  // body 2: shell inertia, with specified mass
+  mjtNum mass2 = 8.800005;
+  EXPECT_NEAR(m->body_mass[2], mass2, 1e-6);
+  EXPECT_FLOAT_EQ(m->body_mass[4] - m->body_mass[3], m->body_mass[2]);
+
+  mjtNum mass2_0 = mass2 * A0 / Atotal;
+  mjtNum mass2_1 = mass2 * A1 / Atotal;
+  mjtNum mass2_2 = mass2 * A2 / Atotal;
+  mjtNum I2x = 2 * (mass2_0 * ly * ly / 12 + mass2_0 * dz * dz +
+                    mass2_1 * (ly * ly + lz * lz) / 12 +
+                    mass2_2 * lz * lz / 12 + mass2_2 * dy * dy);
+  mjtNum I2y =
+      2 * (mass2_0 * lx * lx / 12 + mass2_0 * dz * dz + mass2_1 * lz * lz / 12 +
+           mass2_1 * dx * dx + mass2_2 * (lx * lx + lz * lz) / 12);
+  mjtNum I2z =
+      2 * (mass2_0 * (lx * lx + ly * ly) / 12 + mass2_1 * ly * ly / 12 +
+           mass2_1 * dx * dx + mass2_2 * lx * lx / 12 + mass2_2 * dy * dy);
+
+  EXPECT_NEAR(m->body_inertia[6], I2x, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[7], I2y, kInertiaTol);
+  EXPECT_NEAR(m->body_inertia[8], I2z, kInertiaTol);
+
+  // compute approximate shell inertia by subtracting inertias of massive bodies
+  // with small radius difference
+  mjtNum* inertia3 = m->body_inertia + 9;
+  mjtNum* inertia4 = m->body_inertia + 12;
+  mjtNum shell_inertia[3];
+  mju_sub3(shell_inertia, inertia4, inertia3);
+  EXPECT_NEAR(shell_inertia[0], m->body_inertia[6], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[1], m->body_inertia[7], kInertiaTol);
+  EXPECT_NEAR(shell_inertia[2], m->body_inertia[8], kInertiaTol);
+
+  mj_deleteModel(m);
 }
 
 // ------------- test inertiagrouprange ----------------------------------------
@@ -767,7 +1130,7 @@ TEST_F(MjCGeomTest, BadMeshZeroMassDensityDoesntError) {
     <asset>
       <mesh name="bad_mesh"
         vertex="0 0 0  1 0 0  0 1 0  0 0 1"
-        face="0 2 1" />
+        face="0 2 1"  inertia="shell"/>
     </asset>
     <worldbody>
       <body>
@@ -787,13 +1150,94 @@ TEST_F(MjCGeomTest, BadMeshZeroMassDensityDoesntError) {
   mj_deleteModel(model);
 }
 
+// ------------- test joints --------------------------------------------------
+
+using MjCJointTest = MujocoTest;
+
+TEST_F(MjCJointTest, AlignFree) {
+  const std::string xml_path =
+      GetTestDataFilePath("user/testdata/freejoint.xml");
+  std::array<char, 1024> err;
+  mjSpec* s = mj_parseXML(xml_path.c_str(), nullptr, err.data(), err.size());
+  ASSERT_THAT(s, NotNull()) << err.data();
+  s->compiler.alignfree = 1;  // auto-aligned free joint
+  mjModel* m = mj_compile(s, nullptr);
+  ASSERT_THAT(m, NotNull());
+
+  // with alignfree the body has sameframe and simple and all dof are simple
+  EXPECT_EQ(m->body_sameframe[1], 1);
+  EXPECT_EQ(m->body_simple[1], 1);
+  EXPECT_EQ(m->dof_simplenum[0], 6);
+
+  // make unaligned model
+  s->compiler.alignfree = 0;  // unaligned free joint
+  mjModel* m_u = mj_compile(s, nullptr);
+  ASSERT_THAT(m_u, NotNull());
+
+  // no sameframe or simple
+  EXPECT_EQ(m_u->body_sameframe[1], 0);
+  EXPECT_EQ(m_u->body_simple[1], 0);
+
+  // make datas for both models
+  mjData* d = mj_makeData(m);
+  mjData* d_u = mj_makeData(m_u);
+
+  // call mj_forward
+  mj_forward(m, d);
+  mj_forward(m_u, d_u);
+
+  // expect x-frames (sensors) to match to very high precision
+  double eps = 1e-10;
+  EXPECT_THAT(
+      AsVector(d->sensordata, m->nsensordata),
+      Pointwise(DoubleNear(eps), AsVector(d_u->sensordata, m->nsensordata)));
+
+  // no frame sensors for lights, test separately
+  EXPECT_THAT(AsVector(d->light_xpos, 3),
+              Pointwise(DoubleNear(eps), AsVector(d_u->light_xpos, 3)));
+  EXPECT_THAT(AsVector(d->light_xdir, 3),
+              Pointwise(DoubleNear(eps), AsVector(d_u->light_xdir, 3)));
+
+  // reduce timestep to 0.1ms and use RK4, simulate for 1 second
+  m->opt.timestep = m_u->opt.timestep = 1e-4;
+  m->opt.integrator = m_u->opt.integrator = mjINT_RK4;
+  while (d->time < 1) {
+    mj_step(m, d);
+    mj_step(m_u, d_u);
+  }
+
+  // expect qpos to be significantly different, since the semantics are changed
+  mj_markStack(d);
+  int nq = m->nq;
+  mjtNum* dqpos = mj_stackAllocNum(d, nq);
+  mju_sub(dqpos, d->qpos, d_u->qpos, nq);
+  EXPECT_GT(mju_norm(dqpos, nq), 1.0);
+  mj_freeStack(d);
+
+  // expect x-frames to match to reasonable precision
+  eps = 1e-5;
+  EXPECT_THAT(
+      AsVector(d->sensordata, m->nsensordata),
+      Pointwise(DoubleNear(eps), AsVector(d_u->sensordata, m->nsensordata)));
+  EXPECT_THAT(AsVector(d->light_xpos, 3),
+              Pointwise(DoubleNear(eps), AsVector(d_u->light_xpos, 3)));
+  EXPECT_THAT(AsVector(d->light_xdir, 3),
+              Pointwise(DoubleNear(eps), AsVector(d_u->light_xdir, 3)));
+
+  mj_deleteData(d_u);
+  mj_deleteData(d);
+  mj_deleteModel(m_u);
+  mj_deleteModel(m);
+  mj_deleteSpec(s);
+}
+
+
 // ------------- test height fields --------------------------------------------
 
 using MjCHFieldTest = MujocoTest;
 
 TEST_F(MjCHFieldTest, PngMap) {
-  const std::string xml_path =
-      GetTestDataFilePath("user/testdata/hfield_png.xml");
+  const string xml_path = GetTestDataFilePath("user/testdata/hfield_png.xml");
   std::array<char, 1024> error;
   mjModel* model =
       mj_loadXML(xml_path.c_str(), nullptr, error.data(), error.size());
@@ -1114,7 +1558,7 @@ TEST_F(InheritrangeTest, WorksForDegrees) {
   std::array<char, 1024> error;
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
   ASSERT_THAT(model, NotNull()) << error.data();
-  EXPECT_DOUBLE_EQ(model->actuator_ctrlrange[0], mjPI/2);
+  EXPECT_DOUBLE_EQ(model->actuator_ctrlrange[0], mjPI / 2);
   EXPECT_DOUBLE_EQ(model->actuator_ctrlrange[1], mjPI);
 
   mj_deleteModel(model);
@@ -1477,13 +1921,13 @@ constexpr char kKeyAutoLimits[] = "user/testdata/auto_limits.xml";
 
 // check joint limit values when automatically inferred based on range
 TEST_F(LimitedTest, JointLimited) {
-  const std::string path = GetTestDataFilePath(kKeyAutoLimits);
+  const string path = GetTestDataFilePath(kKeyAutoLimits);
   std::array<char, 1024> err;
   mjModel* model = mj_loadXML(path.c_str(), nullptr, err.data(), err.size());
   ASSERT_THAT(model, NotNull()) << err.data();
 
   // see `user/testdata/auto_limits.xml` for expected values
-  for (int i=0; i < model->njnt; i++) {
+  for (int i = 0; i < model->njnt; i++) {
     EXPECT_EQ(model->jnt_limited[i], (mjtByte)model->jnt_user[i])
         << i << " " << (int)model->jnt_limited[i] << " "
         << (int)model->jnt_user[i];
@@ -1615,6 +2059,51 @@ TEST_F(TendonTest, SiteBetweenPulleyNotAllowed) {
   EXPECT_THAT(error.data(), HasSubstr("line 9"));
 }
 
+TEST_F(TendonTest, ActuatorForceRangeNotAllowed) {
+  std::string xml = R"(
+  <mujoco>
+    <worldbody>
+      <site name="site0"/>
+      <site name="site1"/>
+    </worldbody>
+    <tendon>
+      <spatial name="spatial" actuatorfrclimited="true" actuatorfrcrange="{}">
+        <site site="site0"/>
+        <site site="site1"/>
+      </spatial>
+    </tendon>
+    <actuator>
+      <motor tendon="spatial"/>
+    </actuator>
+  </mujoco>
+  )";
+
+  std::array<char, 1024> error;
+  std::string str_replace = "{}";
+  size_t rng_ind = xml.find(str_replace);
+
+  std::string xml0 = xml;
+  std::string range0 = "-2 -1";
+  xml0.replace(rng_ind, str_replace.length(), range0);
+  mjModel* m0 = LoadModelFromString(xml0.c_str(), error.data(), error.size());
+  EXPECT_THAT(m0, IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("invalid actuatorfrcrange in tendon"));
+
+  std::string xml1 = xml;
+  std::string range1 = "1 2";
+  xml1.replace(rng_ind, str_replace.length(), range1);
+  mjModel* m1 = LoadModelFromString(xml1.c_str(), error.data(), error.size());
+  EXPECT_THAT(m1, IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("invalid actuatorfrcrange in tendon"));
+
+  std::string xml2 = xml;
+  std::string range2 = "1 0";
+  xml2.replace(rng_ind, str_replace.length(), range2);
+  mjModel* m2 = LoadModelFromString(xml2.c_str(), error.data(), error.size());
+  EXPECT_THAT(m2, IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("invalid actuatorfrcrange in tendon"));
+}
+
 // ------------- tests for tendon springrange ----------------------------------
 
 using SpringrangeTest = MujocoTest;
@@ -1670,8 +2159,10 @@ TEST_F(SpringrangeTest, InvalidRange) {
   EXPECT_THAT(error.data(), HasSubstr("line 9"));
 }
 
+using UserObjectsTest = MujocoTest;
+
 // ------------- test frame ----------------------------------------------------
-TEST_F(MujocoTest, Frame) {
+TEST_F(UserObjectsTest, Frame) {
   static constexpr char xml[] = R"(
   <mujoco>
     <worldbody>
@@ -1710,7 +2201,6 @@ TEST_F(MujocoTest, Frame) {
       </body>
     </worldbody>
   </mujoco>
-
   )";
   constexpr mjtNum eps = 1e-14;
   std::array<char, 1024> error;
@@ -1766,8 +2256,59 @@ TEST_F(MujocoTest, Frame) {
   mj_deleteData(d);
 }
 
+TEST_F(UserObjectsTest, FrameTransformsLight) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <frame euler="0 45 0" pos="0 0 1">
+        <light pos="-1 0 0" dir="1 0 -1"/>
+      </frame>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  EXPECT_THAT(m, NotNull()) << error.data();
+  EXPECT_EQ(m->nlight, 1);
+
+  constexpr mjtNum eps = 1e-14;
+  EXPECT_NEAR(m->light_pos[0], -mju_sqrt(.5), eps);
+  EXPECT_NEAR(m->light_pos[1], 0, eps);
+  EXPECT_NEAR(m->light_pos[2], 1 + mju_sqrt(.5), eps);
+
+  EXPECT_NEAR(m->light_dir[0], 0, eps);
+  EXPECT_NEAR(m->light_dir[1], 0, eps);
+  EXPECT_NEAR(m->light_dir[2], -1, eps);
+
+  mj_deleteModel(m);
+}
+
+TEST_F(ContentTypeTest, ImageLightsReferenceTexture) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <texture name="texture" type="cube" builtin="flat" mark="cross" width="8"
+       rgb1="0.8 0.6 0.4" rgb2="0.8 0.6 0.4" markrgb="1 1 1"/>
+    </asset>
+
+    <worldbody>
+      <light type="image" texture="texture"/>
+    </worldbody>
+  </mujoco>
+  )";
+
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  EXPECT_THAT(m, NotNull());
+  EXPECT_EQ(m->ntex, 1);
+  EXPECT_EQ(m->nlight, 1);
+  EXPECT_THAT(m->light_texid[0], 0);
+  mj_deleteModel(m);
+}
+
+
 // ------------- test bvh ------------------------------------------------------
-TEST_F(MujocoTest, RobustBVH) {
+TEST_F(UserObjectsTest, RobustBVH) {
   static constexpr char xml1[] = R"(
   <mujoco>
     <worldbody>
@@ -1800,10 +2341,10 @@ TEST_F(MujocoTest, RobustBVH) {
 
   std::array<char, 1024> error;
   mjModel* m1 = LoadModelFromString(xml1, error.data(), error.size());
-  EXPECT_THAT(m1, testing::NotNull()) << error.data();
+  EXPECT_THAT(m1, NotNull()) << error.data();
 
   mjModel* m2 = LoadModelFromString(xml2, error.data(), error.size());
-  EXPECT_THAT(m2, testing::NotNull()) << error.data();
+  EXPECT_THAT(m2, NotNull()) << error.data();
 
   EXPECT_EQ(m1->nbvh, m2->nbvh);
   for (int i = 0; i < m1->nbvh; i++) {
@@ -1812,6 +2353,273 @@ TEST_F(MujocoTest, RobustBVH) {
 
   mj_deleteModel(m1);
   mj_deleteModel(m2);
+}
+
+// ------------- test equality compilation -------------------------------------
+
+TEST_F(UserObjectsTest, BadConnect) {
+  string base = R"(
+  <mujoco>
+    <worldbody>
+      <site name="0" size="1"/>
+      <body name="1" pos="0 0 1">
+        <freejoint/>
+        <geom size="1"/>
+        <site name="1"/>
+      </body>
+    </worldbody>
+    <equality>
+      CONNECT
+    </equality>
+  </mujoco>
+  )";
+  int pos = base.find("CONNECT");
+  int len = 7;
+
+  // good model using body semantic
+  string xml = base.replace(pos, len, "<connect body1='1' anchor='0 0 1'/>");
+  char error[1024];
+  mjModel* m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, NotNull()) << error;
+  EXPECT_THAT(AsVector(m->eq_data, 6), ElementsAre(0, 0, 1, 0, 0, 2));
+  mj_deleteModel(m);
+
+  // good model using site semantic
+  xml = base.replace(pos, len, "<connect site1='0' site2='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, NotNull()) << error;
+  EXPECT_THAT(AsVector(m->eq_data, 6), ElementsAre(0, 0, 0, 0, 0, 0));
+  mj_deleteModel(m);
+
+  char error_missing[] =
+      "either both body1 and anchor must be defined,"
+      " or both site1 and site2 must be defined\nElement 'connect', line 12";
+
+  // bad model (missing anchor)
+  xml = base.replace(pos, len, "<connect body1='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_missing));
+
+  char error_mixed[] =
+      "body and site semantics cannot be mixed"
+      "\nElement 'connect', line 12";
+
+  // bad model (mixing body and site)
+  xml = base.replace(pos, len, "<connect body1='1' site1='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_mixed));
+
+  // load spec with no constraints
+  xml = base.erase(pos, len);
+  mjSpec* s = mj_parseXMLString(xml.c_str(), nullptr, error, sizeof(error));
+  ASSERT_THAT(s, NotNull()) << error;
+
+  // add a connect but don't set objtype
+  mjsEquality* equality = mjs_addEquality(s, nullptr);
+  equality->type = mjEQ_CONNECT;
+  mjs_setString(equality->name1, "0");
+  mjs_setString(equality->name2, "1");
+
+  // expect compilation to fail
+  m = mj_compile(s, nullptr);
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(mjs_getError(s),
+              HasSubstr("connect constraint supports only sites and bodies"));
+
+  // set objtype, expect compilation to succeed
+  equality->objtype = mjOBJ_SITE;
+  m = mj_compile(s, nullptr);
+  ASSERT_THAT(m, NotNull()) << mjs_getError(s);
+  mj_deleteModel(m);
+  mj_deleteSpec(s);
+}
+
+TEST_F(UserObjectsTest, BadWeld) {
+  string base = R"(
+  <mujoco>
+    <worldbody>
+      <site name="0" size="1"/>
+      <body name="1" pos="0 0 1">
+        <freejoint/>
+        <geom size="1"/>
+        <site name="1"/>
+      </body>
+    </worldbody>
+    <equality>
+      WELD
+    </equality>
+  </mujoco>
+  )";
+  int pos = base.find("WELD");
+  int len = 4;
+
+  // good model using body semantic
+  string xml = base.replace(pos, len,
+                            "<weld body1='1' anchor='0 0 1' torquescale='2'/>");
+  char error[1024];
+  mjModel* m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, NotNull()) << error;
+  EXPECT_THAT(AsVector(m->eq_data, 10),
+              ElementsAre(0, 0, 1, 0, 0, 0, 1, 0, 0, 0));
+  mj_deleteModel(m);
+
+  // good model using site semantic
+  xml = base.replace(pos, len, "<weld site1='0' site2='1' torquescale='2'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, NotNull()) << error;
+  EXPECT_THAT(AsVector(m->eq_data, 10),
+              ElementsAre(0, 1, 0, 0, 0, 0, 0, 0, 0, 0));
+  mj_deleteModel(m);
+
+  char error_mixed[] =
+      "body and site semantics cannot be mixed"
+      "\nElement 'weld', line 12";
+
+  // bad model (mixing body and site)
+  xml = base.replace(pos, len, "<weld body1='1' site1='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_mixed));
+
+  // bad model (mixing site and anchor)
+  xml = base.replace(pos, len, "<weld anchor='0 0 1' site1='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_mixed));
+
+  // bad model (mixing site and relpose)
+  xml = base.replace(pos, len, "<weld relpose='0 0 0 1 0 0 0' site1='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_mixed));
+
+  // bad model (body and site semantics are valid, but both are specified)
+  xml = base.replace(pos, len, "<weld body1='1' site1='1' site2='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_mixed));
+
+  char error_underspecified[] =
+      "either body1 must be defined and optionally {body2, anchor, "
+      "relpose}, or site1 and site2 must be defined\nElement 'weld', line 12";
+
+  // bad model (underspecified body semantics)
+  xml = base.replace(pos, len, "<weld anchor='0 0 1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_underspecified));
+
+  // bad model (underspecified site semantics)
+  xml = base.replace(pos, len, "<weld site2='1'/>");
+  m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr(error_underspecified));
+
+  // load spec with no constraints
+  xml = base.erase(pos, len);
+  mjSpec* s = mj_parseXMLString(xml.c_str(), nullptr, error, sizeof(error));
+  ASSERT_THAT(s, NotNull()) << error;
+
+  // add a weld but don't set objtype
+  mjsEquality* equality = mjs_addEquality(s, nullptr);
+  equality->type = mjEQ_WELD;
+  mjs_setString(equality->name1, "0");
+  mjs_setString(equality->name2, "1");
+
+  // expect compilation to fail
+  m = mj_compile(s, nullptr);
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(mjs_getError(s),
+              HasSubstr("weld constraint supports only sites and bodies"));
+
+  // set objtype, expect compilation to succeed
+  equality->objtype = mjOBJ_SITE;
+  m = mj_compile(s, nullptr);
+  ASSERT_THAT(m, NotNull()) << mjs_getError(s);
+  mj_deleteModel(m);
+  mj_deleteSpec(s);
+}
+
+TEST_F(UserObjectsTest, Inertial) {
+  string xml = R"(
+  <mujoco>
+    <compiler angle="radian"/>
+    <worldbody>
+      <body>
+        <inertial mass="1" pos="2 3 4" euler="3 4 5" diaginertia="4 5 6"/>
+      </body>
+      <body>
+        <inertial mass="2" pos="1 2 3" fullinertia="4 3 2 0 0 0"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+
+  char error[1024];
+  mjModel* m = LoadModelFromString(xml.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, NotNull()) << error;
+  EXPECT_EQ(m->body_mass[1], 1);
+  EXPECT_THAT(AsVector(m->body_ipos + 3, 3), ElementsAre(2, 3, 4));
+  EXPECT_THAT(AsVector(m->body_inertia + 3, 3), ElementsAre(4, 5, 6));
+
+  mjtNum quat[4];
+  const mjtNum euler[3] = {3, 4, 5};
+  mju_euler2Quat(quat, euler, "xyz");
+  EXPECT_THAT(AsVector(m->body_iquat + 4, 4),
+              Pointwise(DoubleNear(1e-8), AsVector(quat, 4)));
+
+  EXPECT_EQ(m->body_mass[2], 2);
+  EXPECT_THAT(AsVector(m->body_ipos + 6, 3), ElementsAre(1, 2, 3));
+  EXPECT_THAT(AsVector(m->body_inertia + 6, 3), ElementsAre(4, 3, 2));
+  mj_deleteModel(m);
+
+  string bad_xml1 = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <inertial mass="1" pos="0 0 0" diaginertia="4 5 6" fullinertia="4 3 2 0 0 0"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  m = LoadModelFromString(bad_xml1.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr("fullinertia and diagonal inertia cannot both"));
+
+  string bad_xml2 = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <inertial mass="1" pos="0 0 0" euler="4 5 6" fullinertia="4 3 2 0 0 0"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  m = LoadModelFromString(bad_xml2.c_str(), error, sizeof(error));
+  ASSERT_THAT(m, IsNull());
+  EXPECT_THAT(error, HasSubstr("fullinertia and inertial orientation cannot"));
+}
+
+TEST_F(UserObjectsTest, ZeroMass) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <body>
+          <geom mass="0" size="0.01"/>
+          <geom mass="0" size="0.01"/>
+        </body>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  EXPECT_THAT(model, NotNull()) << error;
+  mj_deleteModel(model);
 }
 
 }  // namespace

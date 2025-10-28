@@ -31,6 +31,7 @@ typedef enum _mjtFcompType {
   mjFCOMPTYPE_ELLIPSOID,
   mjFCOMPTYPE_SQUARE,
   mjFCOMPTYPE_DISC,
+  mjFCOMPTYPE_CIRCLE,
   mjFCOMPTYPE_MESH,
   mjFCOMPTYPE_GMSH,
   mjFCOMPTYPE_DIRECT,
@@ -39,16 +40,26 @@ typedef enum _mjtFcompType {
 } mjtFcompType;
 
 
+typedef enum _mjtDof {
+  mjFCOMPDOF_FULL = 0,
+  mjFCOMPDOF_RADIAL,
+  mjFCOMPDOF_TRILINEAR,
+  mjFCOMPDOF_QUADRATIC,
+
+  mjNFCOMPDOFS
+} mjtDof;
+
+
 class mjCFlexcomp {
  public:
   mjCFlexcomp(void);
-  bool Make(mjSpec* spec, mjsBody* body, char* error, int error_sz);
+  bool Make(mjsBody* body, char* error, int error_sz);
 
   bool MakeGrid(char* error, int error_sz);
-  bool MakeBox(char* error, int error_sz);
+  bool MakeBox(char* error, int error_sz, int dim, bool open = true);
   bool MakeSquare(char* error, int error_sz);
-  bool MakeMesh(mjCModel* model, char* error, int error_sz);
-  bool MakeGMSH(mjCModel* model, char* error, int error_sz);
+  bool MakeMesh(mjCModel* model, mjsCompiler* compiler, char* error, int error_sz);
+  bool MakeGMSH(mjCModel* model, mjsCompiler* compiler, char* error, int error_sz);
   void LoadGMSH(mjCModel* model, mjResource* resource);
   void LoadGMSH41(char* buffer, int binary, int nodeend, int nodebegin,
                   int elemend, int elembegin);
@@ -67,10 +78,12 @@ class mjCFlexcomp {
   int count[3];                   // grid count in each dimension
   double spacing[3];              // spacing between grid elements
   double scale[3];                // scaling for mesh and direct
+  double origin[3];               // origin for generating a 3D mesh from a convex 2D mesh
   double mass;                    // total mass of auto-generated bodies
   double inertiabox;              // size of inertia box for each body
   bool equality;                  // create edge equality constraint
   std::string file;               // mesh/gmsh file name
+  mjtDof doftype;                 // dof type, all vertices or trilinear interpolation
 
   // pin specifications
   std::vector<int> pinid;         // ids of points to pin
@@ -94,6 +107,7 @@ class mjCFlexcomp {
   std::vector<bool> used;         // is point used by any element (false: skip)
   std::vector<int> element;       // flex elements
   std::vector<float> texcoord;    // vertex texture coordinates
+  std::vector<int> elemtexcoord;  // face texture coordinates (OBJ only)
 
   // plugin support
   std::string plugin_name;

@@ -26,12 +26,6 @@ extern "C" {
 
 // set (type, size, pos, mat) connector-type geom between given points
 //  assume that mjv_initGeom was already called to set all other properties
-MJAPI void mjv_makeConnector(mjvGeom* geom, int type, mjtNum width,
-                             mjtNum a0, mjtNum a1, mjtNum a2,
-                             mjtNum b0, mjtNum b1, mjtNum b2);
-
-// set (type, size, pos, mat) connector-type geom between given points
-//  assume that mjv_initGeom was already called to set all other properties
 MJAPI void mjv_connector(mjvGeom* geom, int type, mjtNum width,
                          const mjtNum from[3], const mjtNum to[3]);
 
@@ -60,12 +54,21 @@ MJAPI void mjv_updateActiveFlex(const mjModel* m, mjData* d, mjvScene* scn, cons
 MJAPI void mjv_updateSkin(const mjModel* m, const mjData* d, mjvScene* scn);
 
 // update visible skins only
-MJAPI void mjv_updateActiveSkin(const mjModel* m, const mjData* d, mjvScene* scn, const mjvOption* opt);
+MJAPI void mjv_updateActiveSkin(const mjModel* m, const mjData* d, mjvScene* scn,
+                                const mjvOption* opt);
 
-#define mjNCATENARY 31
+// computes the camera position, forward, up, and right vectors
+// Nullable: headpos, forward, up, right
+void mjv_cameraFrame(mjtNum headpos[3], mjtNum forward[3], mjtNum up[3], mjtNum right[3],
+                     const mjData* d, const mjvCamera* cam);
+
+// computes the camera frustums, i.e. vertical, horizontal, and clip planes
+// Nullable: zver, zhor, zclip
+void mjv_cameraFrustum(float zver[2], float zhor[2], float zclip[2],  const mjModel* m,
+                       const mjvCamera* cam);
 
 int mjv_catenary(const mjtNum x0[3], const mjtNum x1[3], const mjtNum gravity[3], mjtNum length,
-                 mjtNum catenary[3*mjNCATENARY]);
+                 mjtNum* catenary, int ncatenary);
 
 #ifdef __cplusplus
 }

@@ -115,14 +115,14 @@ struct mjrContext_ {                // custom OpenGL context
   unsigned int auxColor_r[mjNAUX];  // auxiliary color buffer for resolving
 
   // materials with textures
-  int mat_texid[mjMAXMATERIAL*mjNTEXROLE];       // material texture ids (-1: no texture)
-  int mat_texuniform[mjMAXMATERIAL];            // texture repetition for 2d mapping
-  int mat_texrepeat[mjMAXMATERIAL*2];           // texture repetition for 2d mapping
+  int mat_texid[mjMAXMATERIAL*mjNTEXROLE]; // material texture ids (-1: no texture)
+  int mat_texuniform[mjMAXMATERIAL];       // uniform cube mapping
+  float mat_texrepeat[mjMAXMATERIAL*2];    // texture repetition for 2d mapping
 
   // texture objects and info
-  int ntexture;                        // number of allocated textures
-  int textureType[mjMAXTEXTURE];       // type of texture (mjtTexture) (ntexture)
-  unsigned int texture[mjMAXTEXTURE];  // texture names
+  int ntexture;                            // number of allocated textures
+  int textureType[mjMAXTEXTURE];           // type of texture (mjtTexture) (ntexture)
+  unsigned int texture[mjMAXTEXTURE];      // texture names
 
   // displaylist starting positions
   unsigned int basePlane;           // all planes from model
@@ -149,7 +149,7 @@ struct mjrContext_ {                // custom OpenGL context
 
   // character info
   int charWidth[127];               // character widths: normal and shadow
-  int charWidthBig[127];            // chacarter widths: big
+  int charWidthBig[127];            // character widths: big
   int charHeight;                   // character heights: normal and shadow
   int charHeightBig;                // character heights: big
 
@@ -161,13 +161,13 @@ struct mjrContext_ {                // custom OpenGL context
   int windowDoublebuffer;           // is default/window framebuffer double buffered
 
   // framebuffer
-  int     currentBuffer;            // currently active framebuffer: mjFB_WINDOW or mjFB_OFFSCREEN
+  int currentBuffer;                // currently active framebuffer: mjFB_WINDOW or mjFB_OFFSCREEN
 
   // pixel output format
-  int     readPixelFormat;          // default color pixel format for mjr_readPixels
+  int readPixelFormat;              // default color pixel format for mjr_readPixels
 
   // depth output format
-  int     readDepthMap;             // depth mapping: mjDEPTH_ZERONEAR or mjDEPTH_ZEROFAR
+  int readDepthMap;                 // depth mapping: mjDEPTH_ZERONEAR or mjDEPTH_ZEROFAR
 };
 typedef struct mjrContext_ mjrContext;
 

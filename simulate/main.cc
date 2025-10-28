@@ -25,6 +25,9 @@
 #include <string>
 #include <thread>
 
+#if defined(mjUSEUSD)
+#include <mujoco/experimental/usd/usd.h>
+#endif
 #include <mujoco/mujoco.h>
 #include "glfw_adapter.h"
 #include "simulate.h"
@@ -39,7 +42,7 @@ extern "C" {
   #if defined(__APPLE__)
     #include <mach-o/dyld.h>
   #endif
-  #include <sys/errno.h>
+  #include <errno.h>
   #include <unistd.h>
 #endif
 }
@@ -224,13 +227,25 @@ mjModel* LoadModel(const char* file, mj::Simulate& sim) {
   char loadError[kErrorLength] = "";
   mjModel* mnew = 0;
   auto load_start = mj::Simulate::Clock::now();
-  if (mju::strlen_arr(filename)>4 &&
-      !std::strncmp(filename + mju::strlen_arr(filename) - 4, ".mjb",
-                    mju::sizeof_arr(filename) - mju::strlen_arr(filename)+4)) {
+
+  std::string filename_str(filename);
+  std::string extension;
+  size_t dot_pos = filename_str.rfind('.');
+
+  if (dot_pos != std::string::npos && dot_pos < filename_str.length() - 1) {
+    extension = filename_str.substr(dot_pos);
+  }
+
+  if (extension == ".mjb") {
     mnew = mj_loadModel(filename, nullptr);
     if (!mnew) {
       mju::strcpy_arr(loadError, "could not load binary model");
     }
+#if defined(mjUSEUSD)
+  } else if (extension == ".usda" || extension == ".usd" ||
+             extension == ".usdc" || extension == ".usdz" ) {
+    mnew = mj_loadUSD(filename, nullptr, loadError, kErrorLength);
+#endif
   } else {
     mnew = mj_loadXML(filename, nullptr, loadError, kErrorLength);
 
@@ -245,15 +260,9 @@ mjModel* LoadModel(const char* file, mj::Simulate& sim) {
   auto load_interval = mj::Simulate::Clock::now() - load_start;
   double load_seconds = Seconds(load_interval).count();
 
-  // if no error and load took more than 1/4 seconds, report load time
-  if (!loadError[0] && load_seconds > 0.25) {
-    mju::sprintf_arr(loadError, "Model loaded in %.2g seconds", load_seconds);
-  }
-
-  mju::strcpy_arr(sim.load_error, loadError);
-
   if (!mnew) {
     std::printf("%s\n", loadError);
+    mju::strcpy_arr(sim.load_error, loadError);
     return nullptr;
   }
 
@@ -264,12 +273,19 @@ mjModel* LoadModel(const char* file, mj::Simulate& sim) {
     sim.run = 0;
   }
 
+  // if no error and load took more than 1/4 seconds, report load time
+  else if (load_seconds > 0.25) {
+    mju::sprintf_arr(loadError, "Model loaded in %.2g seconds", load_seconds);
+  }
+
+  mju::strcpy_arr(sim.load_error, loadError);
+
   return mnew;
 }
 
 // simulate in background thread (while rendering in main thread)
 void PhysicsLoop(mj::Simulate& sim) {
-  // cpu-sim syncronization point
+  // cpu-sim synchronization point
   std::chrono::time_point<mj::Simulate::Clock> syncCPU;
   mjtNum syncSim = 0;
 
@@ -352,7 +368,7 @@ void PhysicsLoop(mj::Simulate& sim) {
           // requested slow-down factor
           double slowdown = 100 / sim.percentRealTime[sim.real_time_index];
 
-          // misalignment condition: distance from target sim time is bigger than syncmisalign
+          // misalignment condition: distance from target sim time is bigger than syncMisalign
           bool misaligned =
               std::abs(Seconds(elapsedCPU).count()/slowdown - elapsedSim) > syncMisalign;
 
@@ -363,6 +379,9 @@ void PhysicsLoop(mj::Simulate& sim) {
             syncCPU = startCPU;
             syncSim = d->time;
             sim.speed_changed = false;
+
+            // inject noise
+            sim.InjectNoise(sim.key);
 
             // run single step, let next iteration deal with timing
             mj_step(m, d);
@@ -393,7 +412,7 @@ void PhysicsLoop(mj::Simulate& sim) {
               }
 
               // inject noise
-              sim.InjectNoise();
+              sim.InjectNoise(sim.key);
 
               // call mj_step
               mj_step(m, d);
@@ -422,6 +441,9 @@ void PhysicsLoop(mj::Simulate& sim) {
         else {
           // run mj_forward, to update rendering and joint sliders
           mj_forward(m, d);
+          if (sim.pause_update) {
+            mju_copy(d->qacc_warmstart, d->qacc, m->nv);
+          }
           sim.speed_changed = true;
         }
       }
@@ -493,6 +515,11 @@ int main(int argc, char** argv) {
 
   // scan for libraries in the plugin directory to load additional plugins
   scanPluginLibraries();
+
+#if defined(mjUSEUSD)
+  // If USD is used, print the version.
+  std::printf("OpenUSD version v%d.%02d\n", PXR_MINOR_VERSION, PXR_PATCH_VERSION);
+#endif
 
   mjvCamera cam;
   mjv_defaultCamera(&cam);

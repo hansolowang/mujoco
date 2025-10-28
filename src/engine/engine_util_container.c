@@ -20,12 +20,11 @@
 
 #include <mujoco/mujoco.h>
 #include "engine/engine_crossplatform.h"
-#include "engine/engine_io.h"
+#include "engine/engine_memory.h"
 
 // stack allocate and initialize new mjArrayList
 mjArrayList* mju_arrayListCreate(mjData* d, size_t element_size, size_t initial_capacity) {
-  mjArrayList* array_list = (mjArrayList*) mj_stackAllocByte(
-    d, sizeof(mjArrayList), _Alignof(mjArrayList));
+  mjArrayList* array_list = mjSTACKALLOC(d, 1, mjArrayList);
   initial_capacity = mjMAX(1, initial_capacity);
   array_list->d = d;
   array_list->element_size = element_size;
@@ -40,7 +39,6 @@ mjArrayList* mju_arrayListCreate(mjData* d, size_t element_size, size_t initial_
 }
 
 
-
 // returns total number of elements in mjArrayList
 size_t mju_arrayListSize(const mjArrayList* array_list) {
   const mjArrayList* cursor = array_list;
@@ -51,7 +49,6 @@ size_t mju_arrayListSize(const mjArrayList* array_list) {
   }
   return array_list_size;
 }
-
 
 
 // copies one element into an mjArrayList
@@ -72,7 +69,6 @@ void mju_arrayListAdd(mjArrayList* array_list, void* element) {
          element, cursor->element_size);
   ++cursor->size;
 }
-
 
 
 // returns pointer to element at index, NULL if out of bounds

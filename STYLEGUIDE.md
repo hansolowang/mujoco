@@ -6,7 +6,8 @@ possible in your code contributions.
 
 ### Scope of this guide
 
-MuJoCo has three main code categories:
+Most of this guide involves C/C++ code. For Python, jump to the section
+[below](#python-code). For MuJoCo C/C++, code has three main categories:
 
 1. **C code:** MuJoCo's core codebase. It consists of public headers under
 `include/` and C source files and internal headers under `src/`. This style
@@ -144,7 +145,7 @@ assignments:
   variable initialisation in `for` loops. For example, inspect the
   `mju_transpose` implementation above.
 
-- Three blank lines are required between function implementations in source files.
+- Two blank lines are required between function implementations in source files.
 
 #### Variable declarations
 
@@ -158,3 +159,10 @@ example above.
 New code should use the C99 convention. When editing an existing function,
 please move existing variable declarations into local scope. Pull requests
 helping us to complete the migration are very welcome.
+
+### [Python code](#python-code)
+
+For Python code, run `pyink foo.py` to adhere to Google's
+[Python style guide](https://google.github.io/styleguide/pyguide.html). For
+sorting and cleaning imports, run `isort foo.py`. Both `pyink` and `isort` can
+be pip installed via `pip install pyink isort`.

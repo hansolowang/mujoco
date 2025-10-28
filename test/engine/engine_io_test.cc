@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Tests for engine/engine_io.c.
+// Tests for engine/{engine_io.c and engine_memory.c}.
 
 #include "src/engine/engine_io.h"
+#include "src/engine/engine_memory.h"
 
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
+#include <filesystem>  // NOLINT
 #include <string>
 #include <vector>
 
@@ -156,7 +157,8 @@ TEST_F(EngineIoTest, ResetVariableSizes) {
   EXPECT_EQ(data->ne, 0);
   EXPECT_EQ(data->nf, 0);
   EXPECT_EQ(data->nefc, 0);
-  EXPECT_EQ(data->nnzJ, 0);
+  EXPECT_EQ(data->nJ, 0);
+  EXPECT_EQ(data->nA, 0);
   EXPECT_EQ(data->ncon, 0);
 
   mj_deleteData(data);
@@ -190,6 +192,74 @@ TEST_F(EngineIoTest, MakeDataResetsAllArenaPointerSizes) {
 #undef X
 
   mj_deleteData(data);
+  mj_deleteModel(model);
+}
+
+TEST_F(EngineIoTest, MjvCopyModel) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="tet" vertex="0 0 0  1 0 0  0 1 0  0 0 1"/>
+    </asset>
+    <worldbody>
+      <geom type="mesh" mesh="tet"/>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model1 = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model1, NotNull()) << error;
+
+  mjModel* model2 = mj_copyModel(nullptr, model1);
+  ASSERT_THAT(model2, NotNull()) << error;
+
+  model1->mesh_vert[0] = 0.1;
+  model1->geom_rgba[0] = 0.2;
+  mj_copyModel(model2, model1);
+
+  EXPECT_FLOAT_EQ(model2->mesh_vert[0], 0.1);
+  EXPECT_FLOAT_EQ(model2->geom_rgba[0], 0.2);
+
+  model1->mesh_vert[0] = 0.3;
+  model1->geom_rgba[0] = 0.4;
+  mjv_copyModel(model2, model1);
+
+  EXPECT_FLOAT_EQ(model2->mesh_vert[0], 0.1);  // unchanged
+  EXPECT_FLOAT_EQ(model2->geom_rgba[0], 0.4);
+
+  mj_deleteModel(model2);
+  mj_deleteModel(model1);
+}
+
+TEST_F(EngineIoTest, MjvCopyData) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body pos="0 0 0.8">
+        <freejoint/>
+        <geom type="sphere" size="0.1"/>
+      </body>
+      <geom type="plane" size="1 1 1"/>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+
+  mjData* data1 = mj_makeData(model);
+  mj_forward(model, data1);
+  EXPECT_THAT(data1->efc_J, NotNull());
+
+  mjData* data2 = mj_copyData(nullptr, model, data1);
+  EXPECT_THAT(data2->efc_J, NotNull());
+
+  mj_deleteData(data2);
+  data2 = mjv_copyData(nullptr, model, data1);
+  EXPECT_THAT(data2->efc_J, IsNull());
+
+  mj_deleteData(data2);
+  mj_deleteData(data1);
   mj_deleteModel(model);
 }
 

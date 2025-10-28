@@ -15,7 +15,9 @@
 #ifndef MUJOCO_PYTHON_STRUCTS_H_
 #define MUJOCO_PYTHON_STRUCTS_H_
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <functional>
 #include <istream>
@@ -39,8 +41,50 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 
+namespace py = ::pybind11;
+
 namespace mujoco::python {
 namespace _impl {
+
+struct VfsAsset {
+  VfsAsset(const char* name, const void* content, std::size_t content_size)
+      : name(name), content(content), content_size(content_size) {}
+  const char* name;
+  const void* content;
+  std::size_t content_size;
+};
+
+// strip path prefix from filename and make lowercase
+inline std::string StripPath(const char* name) {
+  std::string filename(name);
+  size_t start = filename.find_last_of("/\\");
+
+  // get name without path
+  if (start != std::string::npos) {
+    filename = filename.substr(start + 1, filename.size() - start - 1);
+  }
+
+  // make lowercase
+  std::transform(filename.begin(), filename.end(), filename.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  return filename;
+}
+
+
+// Converts a dict with py::bytes value to a vector of standard C++ types.
+// This allows us to release the GIL early. Note that the vector consists only
+// of pointers to existing data so no substantial data copies are being made.
+inline std::vector<VfsAsset> ConvertAssetsDict(
+    const std::optional<std::unordered_map<std::string, py::bytes>>& assets) {
+  std::vector<VfsAsset> out;
+  if (assets.has_value()) {
+    for (const auto& [name, content] : *assets) {
+      out.emplace_back(name.c_str(), PYBIND11_BYTES_AS_STRING(content.ptr()),
+                       py::len(content));
+    }
+  }
+  return out;
+}
 
 template <typename T>
 class WrapperBase {
@@ -489,7 +533,7 @@ class MjWrapper<raw::MjModel> : public WrapperBase<raw::MjModel> {
       const std::optional<
           std::unordered_map<std::string, pybind11::bytes>>& assets);
 
-  static MjWrapper CompileSpec(raw::MjSpec* spec, const mjVFS* vfs);
+  static MjWrapper WrapRawModel(raw::MjModel* m);
 
   static constexpr char kFromRawPointer[] =
       "__MUJOCO_STRUCTS_MJMODELWRAPPER_LOOKUP";
@@ -623,12 +667,12 @@ class MjWrapper<raw::MjData>: public WrapperBase<raw::MjData> {
   py_array_or_tuple_t<mjContact> contact;
 
   py_array_or_tuple_t<size_t> maxuse_threadstack;
-  py_array_or_tuple_t<raw::MjWarningStat> warning;
-  py_array_or_tuple_t<raw::MjTimerStat> timer;
   py_array_or_tuple_t<raw::MjSolverStat> solver;
   py_array_or_tuple_t<int> solver_niter;
   py_array_or_tuple_t<int> solver_nnz;
   py_array_or_tuple_t<mjtNum> solver_fwdinv;
+  py_array_or_tuple_t<raw::MjWarningStat> warning;
+  py_array_or_tuple_t<raw::MjTimerStat> timer;
   py_array_or_tuple_t<mjtNum> energy;
 
  protected:
@@ -1162,8 +1206,8 @@ bool StructsEqual(pybind11::object lhs, pybind11::object rhs) {
 
 // Returns a string representation of a struct like object.
 template <typename T>
-std::string StructRepr(pybind11::object self) {
-  std::ostringstream result;
+void StructReprImpl(pybind11::object self, std::ostringstream& result,
+                    int indent) {
   result << "<"
          << self.attr("__class__").attr("__name__").cast<std::string_view>();
   for (pybind11::handle f : Dir<T>()) {
@@ -1172,10 +1216,16 @@ std::string StructRepr(pybind11::object self) {
       continue;
     }
 
-    result << "\n  " << name << ": "
+    result << "\n" << std::string(indent + 2, ' ') << name << ": "
            << self.attr(f).attr("__repr__")().cast<std::string_view>();
   }
-  result << "\n>";
+  result << "\n" << std::string(indent, ' ') << ">";
+}
+
+template <typename T>
+std::string StructRepr(pybind11::object self) {
+  std::ostringstream result;
+  StructReprImpl<T>(self, result, 0);
   return result.str();
 }
 

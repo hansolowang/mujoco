@@ -37,6 +37,13 @@ void mju_zero3(mjtNum res[3]) {
 }
 
 
+// vec1 == vec2
+int mju_equal3(const mjtNum vec1[3], const mjtNum vec2[3]) {
+  return mju_abs(vec1[0] - vec2[0]) < mjMINVAL &&
+         mju_abs(vec1[1] - vec2[1]) < mjMINVAL &&
+         mju_abs(vec1[2] - vec2[2]) < mjMINVAL;
+}
+
 
 // res = vec
 void mju_copy3(mjtNum res[3], const mjtNum data[3]) {
@@ -44,7 +51,6 @@ void mju_copy3(mjtNum res[3], const mjtNum data[3]) {
   res[1] = data[1];
   res[2] = data[2];
 }
-
 
 
 // res = vec*scl
@@ -55,14 +61,12 @@ void mju_scl3(mjtNum res[3], const mjtNum vec[3], mjtNum scl) {
 }
 
 
-
 // res = vec1 + vec2
 void mju_add3(mjtNum res[3], const mjtNum vec1[3], const mjtNum vec2[3]) {
   res[0] = vec1[0] + vec2[0];
   res[1] = vec1[1] + vec2[1];
   res[2] = vec1[2] + vec2[2];
 }
-
 
 
 // res = vec1 - vec2
@@ -73,14 +77,12 @@ void mju_sub3(mjtNum res[3], const mjtNum vec1[3], const mjtNum vec2[3]) {
 }
 
 
-
 // res += vec
 void mju_addTo3(mjtNum res[3], const mjtNum vec[3]) {
   res[0] += vec[0];
   res[1] += vec[1];
   res[2] += vec[2];
 }
-
 
 
 // res -= vec
@@ -91,7 +93,6 @@ void mju_subFrom3(mjtNum res[3], const mjtNum vec[3]) {
 }
 
 
-
 // res += vec*scl
 void mju_addToScl3(mjtNum res[3], const mjtNum vec[3], mjtNum scl) {
   res[0] += vec[0] * scl;
@@ -100,14 +101,12 @@ void mju_addToScl3(mjtNum res[3], const mjtNum vec[3], mjtNum scl) {
 }
 
 
-
 // res = vec1 + vec2*scl
 void mju_addScl3(mjtNum res[3], const mjtNum vec1[3], const mjtNum vec2[3], mjtNum scl) {
   res[0] = vec1[0] + scl*vec2[0];
   res[1] = vec1[1] + scl*vec2[1];
   res[2] = vec1[2] + scl*vec2[2];
 }
-
 
 
 // normalize vector, return length before normalization
@@ -129,12 +128,10 @@ mjtNum mju_normalize3(mjtNum vec[3]) {
 }
 
 
-
 // compute vector length (without normalizing)
 mjtNum mju_norm3(const mjtNum vec[3]) {
   return mju_sqrt(vec[0]*vec[0] + vec[1]*vec[1] + vec[2]*vec[2]);
 }
-
 
 
 // vector dot-product
@@ -143,13 +140,11 @@ mjtNum mju_dot3(const mjtNum vec1[3], const mjtNum vec2[3]) {
 }
 
 
-
 // Cartesian distance between 3D vectors
 mjtNum mju_dist3(const mjtNum pos1[3], const mjtNum pos2[3]) {
   mjtNum dif[3] = {pos1[0]-pos2[0], pos1[1]-pos2[1], pos1[2]-pos2[2]};
   return mju_sqrt(dif[0]*dif[0] + dif[1]*dif[1] + dif[2]*dif[2]);
 }
-
 
 
 // multiply 3-by-3 matrix by vector
@@ -165,7 +160,6 @@ void mju_mulMatVec3(mjtNum res[3], const mjtNum mat[9], const mjtNum vec[3]) {
 }
 
 
-
 // multiply transposed 3-by-3 matrix by vector
 void mju_mulMatTVec3(mjtNum res[3], const mjtNum mat[9], const mjtNum vec[3]) {
   mjtNum tmp[3] = {
@@ -179,64 +173,46 @@ void mju_mulMatTVec3(mjtNum res[3], const mjtNum mat[9], const mjtNum vec[3]) {
 }
 
 
-
-// multiply vector by 3D rotation matrix (deprecated)
-void mju_rotVecMat(mjtNum res[3], const mjtNum vec[3], const mjtNum mat[9]) {
-  mju_mulMatVec3(res, mat, vec);
-}
-
-
-
-// multiply vector by transposed 3D rotation matrix (deprecated)
-void mju_rotVecMatT(mjtNum res[3], const mjtNum vec[3], const mjtNum mat[9]) {
-  mju_mulMatTVec3(res, mat, vec);
-}
-
-
-
 // multiply 3x3 matrices,
-void mju_mulMatMat3(mjtNum res[9], const mjtNum a[9], const mjtNum b[9]) {
-  res[0] = a[0]*b[0] + a[1]*b[3] + a[2]*b[6];
-  res[1] = a[0]*b[1] + a[1]*b[4] + a[2]*b[7];
-  res[2] = a[0]*b[2] + a[1]*b[5] + a[2]*b[8];
-  res[3] = a[3]*b[0] + a[4]*b[3] + a[5]*b[6];
-  res[4] = a[3]*b[1] + a[4]*b[4] + a[5]*b[7];
-  res[5] = a[3]*b[2] + a[4]*b[5] + a[5]*b[8];
-  res[6] = a[6]*b[0] + a[7]*b[3] + a[8]*b[6];
-  res[7] = a[6]*b[1] + a[7]*b[4] + a[8]*b[7];
-  res[8] = a[6]*b[2] + a[7]*b[5] + a[8]*b[8];
+void mju_mulMatMat3(mjtNum res[9], const mjtNum mat1[9], const mjtNum mat2[9]) {
+  res[0] = mat1[0]*mat2[0] + mat1[1]*mat2[3] + mat1[2]*mat2[6];
+  res[1] = mat1[0]*mat2[1] + mat1[1]*mat2[4] + mat1[2]*mat2[7];
+  res[2] = mat1[0]*mat2[2] + mat1[1]*mat2[5] + mat1[2]*mat2[8];
+  res[3] = mat1[3]*mat2[0] + mat1[4]*mat2[3] + mat1[5]*mat2[6];
+  res[4] = mat1[3]*mat2[1] + mat1[4]*mat2[4] + mat1[5]*mat2[7];
+  res[5] = mat1[3]*mat2[2] + mat1[4]*mat2[5] + mat1[5]*mat2[8];
+  res[6] = mat1[6]*mat2[0] + mat1[7]*mat2[3] + mat1[8]*mat2[6];
+  res[7] = mat1[6]*mat2[1] + mat1[7]*mat2[4] + mat1[8]*mat2[7];
+  res[8] = mat1[6]*mat2[2] + mat1[7]*mat2[5] + mat1[8]*mat2[8];
 }
-
 
 
 // multiply 3x3 matrices, first argument transposed
-void mju_mulMatTMat3(mjtNum res[9], const mjtNum a[9], const mjtNum b[9]) {
-  res[0] = a[0]*b[0] + a[3]*b[3] + a[6]*b[6];
-  res[1] = a[0]*b[1] + a[3]*b[4] + a[6]*b[7];
-  res[2] = a[0]*b[2] + a[3]*b[5] + a[6]*b[8];
-  res[3] = a[1]*b[0] + a[4]*b[3] + a[7]*b[6];
-  res[4] = a[1]*b[1] + a[4]*b[4] + a[7]*b[7];
-  res[5] = a[1]*b[2] + a[4]*b[5] + a[7]*b[8];
-  res[6] = a[2]*b[0] + a[5]*b[3] + a[8]*b[6];
-  res[7] = a[2]*b[1] + a[5]*b[4] + a[8]*b[7];
-  res[8] = a[2]*b[2] + a[5]*b[5] + a[8]*b[8];
+void mju_mulMatTMat3(mjtNum res[9], const mjtNum mat1[9], const mjtNum mat2[9]) {
+  res[0] = mat1[0]*mat2[0] + mat1[3]*mat2[3] + mat1[6]*mat2[6];
+  res[1] = mat1[0]*mat2[1] + mat1[3]*mat2[4] + mat1[6]*mat2[7];
+  res[2] = mat1[0]*mat2[2] + mat1[3]*mat2[5] + mat1[6]*mat2[8];
+  res[3] = mat1[1]*mat2[0] + mat1[4]*mat2[3] + mat1[7]*mat2[6];
+  res[4] = mat1[1]*mat2[1] + mat1[4]*mat2[4] + mat1[7]*mat2[7];
+  res[5] = mat1[1]*mat2[2] + mat1[4]*mat2[5] + mat1[7]*mat2[8];
+  res[6] = mat1[2]*mat2[0] + mat1[5]*mat2[3] + mat1[8]*mat2[6];
+  res[7] = mat1[2]*mat2[1] + mat1[5]*mat2[4] + mat1[8]*mat2[7];
+  res[8] = mat1[2]*mat2[2] + mat1[5]*mat2[5] + mat1[8]*mat2[8];
 }
-
 
 
 // multiply 3x3 matrices, second argument transposed
-void mju_mulMatMatT3(mjtNum res[9], const mjtNum a[9], const mjtNum b[9]) {
-  res[0] = a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
-  res[1] = a[0]*b[3] + a[1]*b[4] + a[2]*b[5];
-  res[2] = a[0]*b[6] + a[1]*b[7] + a[2]*b[8];
-  res[3] = a[3]*b[0] + a[4]*b[1] + a[5]*b[2];
-  res[4] = a[3]*b[3] + a[4]*b[4] + a[5]*b[5];
-  res[5] = a[3]*b[6] + a[4]*b[7] + a[5]*b[8];
-  res[6] = a[6]*b[0] + a[7]*b[1] + a[8]*b[2];
-  res[7] = a[6]*b[3] + a[7]*b[4] + a[8]*b[5];
-  res[8] = a[6]*b[6] + a[7]*b[7] + a[8]*b[8];
+void mju_mulMatMatT3(mjtNum res[9], const mjtNum mat1[9], const mjtNum mat2[9]) {
+  res[0] = mat1[0]*mat2[0] + mat1[1]*mat2[1] + mat1[2]*mat2[2];
+  res[1] = mat1[0]*mat2[3] + mat1[1]*mat2[4] + mat1[2]*mat2[5];
+  res[2] = mat1[0]*mat2[6] + mat1[1]*mat2[7] + mat1[2]*mat2[8];
+  res[3] = mat1[3]*mat2[0] + mat1[4]*mat2[1] + mat1[5]*mat2[2];
+  res[4] = mat1[3]*mat2[3] + mat1[4]*mat2[4] + mat1[5]*mat2[5];
+  res[5] = mat1[3]*mat2[6] + mat1[4]*mat2[7] + mat1[5]*mat2[8];
+  res[6] = mat1[6]*mat2[0] + mat1[7]*mat2[1] + mat1[8]*mat2[2];
+  res[7] = mat1[6]*mat2[3] + mat1[7]*mat2[4] + mat1[8]*mat2[5];
+  res[8] = mat1[6]*mat2[6] + mat1[7]*mat2[7] + mat1[8]*mat2[8];
 }
-
 
 
 //------------------------------ 4D vector and matrix-vector operations ----------------------------
@@ -248,7 +224,6 @@ void mju_zero4(mjtNum res[4]) {
   res[2] = 0;
   res[3] = 0;
 }
-
 
 
 // res = (1,0,0,0)
@@ -267,7 +242,6 @@ void mju_copy4(mjtNum res[4], const mjtNum data[4]) {
   res[2] = data[2];
   res[3] = data[3];
 }
-
 
 
 // normalize vector, return length before normalization
@@ -291,14 +265,12 @@ mjtNum mju_normalize4(mjtNum vec[4]) {
 }
 
 
-
 //------------------------------ vector operations -------------------------------------------------
 
 // res = 0
 void mju_zero(mjtNum* res, int n) {
   memset(res, 0, n*sizeof(mjtNum));
 }
-
 
 
 // res = val
@@ -309,12 +281,10 @@ void mju_fill(mjtNum* res, mjtNum val, int n) {
 }
 
 
-
 // res = vec
 void mju_copy(mjtNum* res, const mjtNum* vec, int n) {
   memcpy(res, vec, n*sizeof(mjtNum));
 }
-
 
 
 // sum(vec)
@@ -329,7 +299,6 @@ mjtNum mju_sum(const mjtNum* vec, int n) {
 }
 
 
-
 // sum(abs(vec))
 mjtNum mju_L1(const mjtNum* vec, int n) {
   mjtNum res = 0;
@@ -340,7 +309,6 @@ mjtNum mju_L1(const mjtNum* vec, int n) {
 
   return res;
 }
-
 
 
 // res = vec*scl
@@ -387,7 +355,6 @@ void mju_scl(mjtNum* res, const mjtNum* vec, mjtNum scl, int n) {
 }
 
 
-
 // res = vec1 + vec2
 void mju_add(mjtNum* res, const mjtNum* vec1, const mjtNum* vec2, int n) {
   int i = 0;
@@ -428,7 +395,6 @@ void mju_add(mjtNum* res, const mjtNum* vec1, const mjtNum* vec2, int n) {
   }
 #endif
 }
-
 
 
 // res = vec1 - vec2
@@ -473,7 +439,6 @@ void mju_sub(mjtNum* res, const mjtNum* vec1, const mjtNum* vec2, int n) {
 }
 
 
-
 // res += vec
 void mju_addTo(mjtNum* res, const mjtNum* vec, int n) {
   int i = 0;
@@ -516,7 +481,6 @@ void mju_addTo(mjtNum* res, const mjtNum* vec, int n) {
 }
 
 
-
 // res -= vec
 void mju_subFrom(mjtNum* res, const mjtNum* vec, int n) {
   int i = 0;
@@ -557,7 +521,6 @@ void mju_subFrom(mjtNum* res, const mjtNum* vec, int n) {
   }
 #endif
 }
-
 
 
 // res += vec*scl
@@ -651,7 +614,6 @@ void mju_addScl(mjtNum* res, const mjtNum* vec1, const mjtNum* vec2, mjtNum scl,
 }
 
 
-
 // normalize vector, return length before normalization
 mjtNum mju_normalize(mjtNum* res, int n) {
   mjtNum norm = (mjtNum)mju_sqrt(mju_dot(res, res, n));
@@ -673,12 +635,10 @@ mjtNum mju_normalize(mjtNum* res, int n) {
 }
 
 
-
 // compute vector length (without normalizing)
 mjtNum mju_norm(const mjtNum* res, int n) {
   return mju_sqrt(mju_dot(res, res, n));
 }
-
 
 
 // vector dot-product
@@ -756,7 +716,6 @@ void mju_mulMatVec(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int nr, in
 }
 
 
-
 // multiply transposed matrix and vector
 void mju_mulMatTVec(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int nr, int nc) {
   mjtNum tmp;
@@ -770,7 +729,6 @@ void mju_mulMatTVec(mjtNum* res, const mjtNum* mat, const mjtNum* vec, int nr, i
 }
 
 
-
 // multiply square matrix with vectors on both sides: return vec1'*mat*vec2
 mjtNum mju_mulVecMatVec(const mjtNum* vec1, const mjtNum* mat, const mjtNum* vec2, int n) {
   mjtNum res = 0;
@@ -779,7 +737,6 @@ mjtNum mju_mulVecMatVec(const mjtNum* vec1, const mjtNum* mat, const mjtNum* vec
   }
   return res;
 }
-
 
 
 //------------------------------ matrix operations -------------------------------------------------
@@ -794,7 +751,6 @@ void mju_transpose(mjtNum* res, const mjtNum* mat, int nr, int nc) {
 }
 
 
-
 // symmetrize square matrix res = (mat + mat')/2
 void mju_symmetrize(mjtNum* res, const mjtNum* mat, int n) {
   for (int i=0; i < n; i++) {
@@ -806,7 +762,6 @@ void mju_symmetrize(mjtNum* res, const mjtNum* mat, int n) {
 }
 
 
-
 // identity matrix
 void mju_eye(mjtNum* mat, int n) {
   mju_zero(mat, n*n);
@@ -814,7 +769,6 @@ void mju_eye(mjtNum* mat, int n) {
     mat[i*(n + 1)] = 1;
   }
 }
-
 
 
 //------------------------------ matrix-matrix operations ------------------------------------------
@@ -836,7 +790,6 @@ void mju_mulMatMat(mjtNum* res, const mjtNum* mat1, const mjtNum* mat2,
 }
 
 
-
 // multiply matrices, second argument transposed
 void mju_mulMatMatT(mjtNum* res, const mjtNum* mat1, const mjtNum* mat2,
                     int r1, int c1, int r2) {
@@ -848,9 +801,9 @@ void mju_mulMatMatT(mjtNum* res, const mjtNum* mat1, const mjtNum* mat2,
 }
 
 
-
-// compute M'*diag*M (diag=NULL: compute M'*M)
-void mju_sqrMatTD(mjtNum* res, const mjtNum* mat, const mjtNum* diag, int nr, int nc) {
+// compute M'*diag*M (diag=NULL: compute M'*M), upper triangle optional
+void mju_sqrMatTD_impl(mjtNum* res, const mjtNum* mat, const mjtNum* diag,
+                       int nr, int nc, int flg_upper) {
   mjtNum tmp;
 
   // half of MatMat routine: only lower triangle
@@ -875,14 +828,21 @@ void mju_sqrMatTD(mjtNum* res, const mjtNum* mat, const mjtNum* diag, int nr, in
     }
   }
 
-  // make symmetric
-  for (int i=0; i < nc; i++) {
-    for (int j=i+1; j < nc; j++) {
-      res[i*nc+j] = res[j*nc+i];
+  // flg_upper is set: make symmetric
+  if (flg_upper) {
+    for (int i=0; i < nc; i++) {
+      for (int j=i+1; j < nc; j++) {
+        res[i*nc+j] = res[j*nc+i];
+      }
     }
   }
 }
 
+
+// compute M'*diag*M (diag=NULL: compute M'*M)
+void mju_sqrMatTD(mjtNum* res, const mjtNum* mat, const mjtNum* diag, int nr, int nc) {
+  mju_sqrMatTD_impl(res, mat, diag, nr, nc, /*flg_upper=*/ 1);
+}
 
 
 // multiply matrices, first argument transposed

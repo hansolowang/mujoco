@@ -26,12 +26,12 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stack>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
-
-#include "tinyxml2.h"
 
 #include <mujoco/mujoco.h>
 #include "cc/array_safety.h"
@@ -40,6 +40,7 @@
 #include "user/user_util.h"
 #include "xml/xml_util.h"
 #include "xml/xml_numeric_format.h"
+#include "tinyxml2.h"
 
 namespace {
 
@@ -105,20 +106,153 @@ FilePath ResolveFilePath(XMLElement* e, const FilePath& filename,
   return FilePath(path) + filename;
 }
 
-}  // namespace
+void AccumulateFiles(std::unordered_set<std::string> &files,
+                     tinyxml2::XMLElement *root, const FilePath &model_dir) {
+  std::optional<FilePath> asset_dir;
+  std::optional<FilePath> mesh_dir;
+  std::optional<FilePath> texture_dir;
+  std::set<std::string> include_and_model_files;
+  std::set<std::string> texture_files;
+  std::set<std::string> mesh_files;
+  std::set<std::string> hfield_files;
 
+  auto accumulate_files = [&](const std::set<std::string> &candidate_files,
+                              std::optional<FilePath> prefix) {
+    for (const auto &file : candidate_files) {
+      FilePath file_with_prefix = !prefix.has_value() ? FilePath(file) : prefix.value() + FilePath(file);
+      if (file_with_prefix.IsAbs()) {
+        files.insert(file_with_prefix.Str());
+      } else {
+        // Else insert dir_path / prefix / file.
+        auto full_path = model_dir + file_with_prefix;
+        files.insert(full_path.Str());
+      }
+    }
+  };
+
+  std::stack<tinyxml2::XMLElement *> elements;
+  elements.push(root);
+  while (!elements.empty()) {
+    tinyxml2::XMLElement *elem = elements.top();
+    elements.pop();
+
+    if (!std::strcmp(elem->Value(), "include") ||
+        !std::strcmp(elem->Value(), "model")) {
+      auto file_attr = mjXUtil::ReadAttrFile(elem, "file", nullptr);
+      if (file_attr.has_value()) {
+        include_and_model_files.insert(file_attr->Str());
+        // Neither of these elements should have children.
+        continue;
+      }
+    } else if (!std::strcmp(elem->Value(), "compiler")) {
+      auto assetdir_str = mjXUtil::ReadAttrStr(elem, "assetdir", false);
+      if (assetdir_str.has_value()) asset_dir = FilePath(assetdir_str.value());
+      auto meshdir_str = mjXUtil::ReadAttrStr(elem, "meshdir", false);
+      if (meshdir_str.has_value()) mesh_dir = FilePath(meshdir_str.value());
+      auto texturedir_str = mjXUtil::ReadAttrStr(elem, "texturedir", false);
+      if (texturedir_str.has_value()) texture_dir = FilePath(texturedir_str.value());
+
+      // compiler elements don't have children.
+      continue;
+    } else if (!std::strcmp(elem->Value(), "mesh") ||
+               !std::strcmp(elem->Value(), "flexcomp") ||
+               !std::strcmp(elem->Value(), "skin")) {
+      // mesh elements don't have children.
+      auto file_attr = mjXUtil::ReadAttrFile(elem, "file", nullptr);
+      if (file_attr.has_value()) {
+        mesh_files.insert(file_attr->Str());
+      }
+      continue;
+    } else if (!std::strcmp(elem->Value(), "hfield")) {
+      // hfield elements don't have children.
+      auto file_attr = mjXUtil::ReadAttrFile(elem, "file", nullptr);
+      if (file_attr.has_value()) {
+        hfield_files.insert(file_attr->Str());
+      }
+      continue;
+    } else if (!std::strcmp(elem->Value(), "texture")) {
+      static const char *attributes[] = {"file",     "fileright", "fileup",
+                                         "fileleft", "filedown",  "filefront",
+                                         "fileback"};
+      for (const auto &attribute : attributes) {
+        auto file_attr = mjXUtil::ReadAttrFile(elem, attribute, nullptr);
+        if (file_attr.has_value()) {
+          texture_files.insert(file_attr->Str());
+        }
+      }
+    }
+
+    tinyxml2::XMLElement *child = elem->FirstChildElement();
+    while (child) {
+      elements.push(child);
+      child = child->NextSiblingElement();
+    }
+  }
+
+  // TODO(shaves): When we have resource decoders implemented they should have a
+  // "get dependencies" function to call here. For non XML types we assume they
+  // have no dependencies here.
+
+  // First resolve all dependent XML files.
+  for (const auto &file : include_and_model_files) {
+    mjStringVec subdeps;
+    FilePath full_path = model_dir + FilePath(file);
+    mju_getXMLDependencies(full_path.Str().c_str(), &subdeps);
+    for (const auto &subdep : subdeps) {
+      files.insert(subdep);
+    }
+  }
+  // Then for each non MJCF resource file, add them to the set of files using their respective
+  // compiler prefixes (if they exist).
+  accumulate_files(texture_files,
+                   texture_dir.has_value() ? texture_dir : asset_dir);
+  accumulate_files(mesh_files, mesh_dir.has_value() ? mesh_dir : asset_dir);
+  accumulate_files(hfield_files, asset_dir);
+}
+}
 
 //---------------------------------- utility functions ---------------------------------------------
 
 // error string copy
 void mjCopyError(char* dst, const char* src, int maxlen) {
-  if (dst && maxlen>0) {
+  if (dst && maxlen > 0) {
     strncpy(dst, src, maxlen);
     dst[maxlen-1] = 0;
   }
 }
 
+void mju_getXMLDependencies(const char* filename, mjStringVec* dependencies) {
+  // load XML file or parse string
+  tinyxml2::XMLDocument doc;
+  doc.LoadFile(filename);
 
+  // error checking
+  if (doc.Error()) {
+    mju_error("Problem reading XML file '%s': %s", filename, doc.ErrorStr());
+  }
+
+  // get top-level element
+  tinyxml2::XMLElement *root = doc.RootElement();
+  if (!root) {
+    mju_error("XML root element not found");
+  }
+  std::unordered_set<std::string> files = {filename};
+
+  std::optional<FilePath> model_dir = std::nullopt;
+  mjResource *resource = mju_openResource("", filename, nullptr,
+                                          nullptr, 0);
+  if (resource != nullptr) {
+    const char* dir;
+    int ndir;
+    mju_getResourceDir(resource, &dir, &ndir);
+    model_dir = FilePath(std::string(dir, ndir));
+    mju_closeResource(resource);
+  }
+  // Get file references from include and model tags.
+  AccumulateFiles(files, root, model_dir.value());
+
+  *dependencies = {files.begin(), files.end()};
+}
 
 // error constructor
 mjXError::mjXError(const XMLElement* elem, const char* msg, const char* str, int pos) {
@@ -243,7 +377,7 @@ std::string mjXSchema::GetError() {
 
 // print spaces
 static void printspace(std::stringstream& str, int n, const char* space) {
-  for (int i=0; i<n; i++) {
+  for (int i=0; i < n; i++) {
     str << space;
   }
 }
@@ -259,14 +393,14 @@ void mjXSchema::Print(std::stringstream& str, int level) const {
   printspace(str, 3*level, " ");
   str << name1 << " (" << type_ << ")";
   int baselen = 3*level + (int)name1.size() + 4;
-  if (baselen<30) {
+  if (baselen < 30) {
     printspace(str, 30-baselen, " ");
   }
 
   // attributes
   int cnt = std::max(baselen, 30);
   for (const std::string& attr : attr_) {
-    if (cnt>60) {
+    if (cnt > 60) {
       str << "\n";
       printspace(str, (cnt = std::max(30, baselen)), " ");
     }
@@ -290,7 +424,7 @@ void mjXSchema::PrintHTML(std::stringstream& str, int level, bool pad) const {
   std::string name1 = (name_ == "body" ? "(world)body" : name_);
 
   // open table
-  if (level==0) {
+  if (level == 0) {
     str << "<table border=\"1\">\n";
   }
 
@@ -341,9 +475,9 @@ bool mjXSchema::NameMatch(XMLElement* elem, int level) {
   // special handling of body, worldbody, and frame
   if (name_ == "body" &&
       ((level == 1 && !strcmp(elem->Value(), "worldbody")) ||
-      (level != 1 && !strcmp(elem->Value(), "body")) ||
-      (level >= 1 && !strcmp(elem->Value(), "frame")) ||
-      (level >= 1 && !strcmp(elem->Value(), "replicate")))) {
+       (level != 1 && !strcmp(elem->Value(), "body")) ||
+       (level >= 1 && !strcmp(elem->Value(), "frame")) ||
+       (level >= 1 && !strcmp(elem->Value(), "replicate")))) {
     return true;
   }
 
@@ -426,23 +560,23 @@ XMLElement* mjXSchema::Check(XMLElement* elem, int level) {
   msg[0] = '\0';
   for (mjXSchema& subschema : subschema_) {
     switch (subschema.type_) {
-    case '!':
-      if (subschema.refcnt_ > 1)
-        mju::sprintf_arr(msg, "unique element '%s' found %d times",
-                         subschema.name_.c_str(), subschema.refcnt_);
-      else if (subschema.refcnt_ < 1)
-        mju::sprintf_arr(msg, "element '%s' is required",
-                         subschema.name_.c_str());
-      break;
+      case '!':
+        if (subschema.refcnt_ > 1)
+          mju::sprintf_arr(msg, "unique element '%s' found %d times",
+                           subschema.name_.c_str(), subschema.refcnt_);
+        else if (subschema.refcnt_ < 1)
+          mju::sprintf_arr(msg, "element '%s' is required",
+                           subschema.name_.c_str());
+        break;
 
-    case '?':
-      if (subschema.refcnt_ > 1)
-        mju::sprintf_arr(msg, "unique element '%s' found %d times",
-                         subschema.name_.c_str(), subschema.refcnt_);
-      break;
+      case '?':
+        if (subschema.refcnt_ > 1)
+          mju::sprintf_arr(msg, "unique element '%s' found %d times",
+                           subschema.name_.c_str(), subschema.refcnt_);
+        break;
 
-    default:
-      break;
+      default:
+        break;
     }
   }
 
@@ -539,7 +673,7 @@ template bool mjXUtil::SameVector(const unsigned char* vec1, const unsigned char
 
 // find string in map, return corresponding integer (-1: not found)
 int mjXUtil::FindKey(const mjMap* map, int mapsz, std::string key) {
-  for (int i=0; i<mapsz; i++) {
+  for (int i=0; i < mapsz; i++) {
     if (map[i].key == key) {
       return map[i].value;
     }
@@ -552,7 +686,7 @@ int mjXUtil::FindKey(const mjMap* map, int mapsz, std::string key) {
 
 // find integer in map, return corresponding string ("": not found)
 std::string mjXUtil::FindValue(const mjMap* map, int mapsz, int value) {
-  for (int i=0; i<mapsz; i++) {
+  for (int i=0; i < mapsz; i++) {
     if (map[i].value == value) {
       return map[i].key;
     }
@@ -565,8 +699,8 @@ std::string mjXUtil::FindValue(const mjMap* map, int mapsz, int value) {
 
 // if attribute is present, return vector of numerical data
 template<typename T>
-std::optional<std::vector<T>> mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr,
-                                                   bool required) {
+std::optional<std::vector<T> > mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr,
+                                                    bool required) {
   std::vector<T> v;
   const char* raw_cstr = elem->Attribute(attr);
   if (raw_cstr) {
@@ -593,13 +727,13 @@ std::optional<std::vector<T>> mjXUtil::ReadAttrVec(XMLElement* elem, const char*
   return v;
 }
 
-template std::optional<std::vector<double>>
+template std::optional<std::vector<double> >
 mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr, bool required);
-template std::optional<std::vector<float>>
+template std::optional<std::vector<float> >
 mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr, bool required);
-template std::optional<std::vector<int>>
+template std::optional<std::vector<int> >
 mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr, bool required);
-template std::optional<std::vector<unsigned char>>
+template std::optional<std::vector<unsigned char> >
 mjXUtil::ReadAttrVec(XMLElement* elem, const char* attr, bool required);
 
 
@@ -751,10 +885,10 @@ bool mjXUtil::ReadAttrInt(XMLElement* elem, const char* attr, int* data, bool re
 void mjXUtil::Vector2String(std::string& txt, const std::vector<float>& vec, int ncol) {
   std::stringstream strm;
 
-  for (size_t i=0; i<vec.size(); i++) {
+  for (size_t i=0; i < vec.size(); i++) {
     if (ncol && (i % ncol) == 0) {
       strm << "\n            ";
-    } else if (i>0) {
+    } else if (i > 0) {
       strm << " ";
     }
     strm << vec[i];
@@ -793,7 +927,7 @@ XMLElement* mjXUtil::FindSubElem(XMLElement* elem, std::string name, bool requir
 
 
 
-// find attribute, translate key, return int value
+// find attribute, translate key into data, return true if found
 bool mjXUtil::MapValue(XMLElement* elem, const char* attr, int* data,
                        const mjMap* map, int mapSz, bool required) {
   // get attribute text
@@ -811,6 +945,42 @@ bool mjXUtil::MapValue(XMLElement* elem, const char* attr, int* data,
   // copy
   *data = value;
   return true;
+}
+
+
+
+// find attribute, translate unique space-separated keys to data, return number of keys found
+int mjXUtil::MapValues(XMLElement* elem, const char* attr, int* data,
+                       const mjMap* map, int mapSz, bool required) {
+  // get attribute text
+  auto maybe_text = ReadAttrStr(elem, attr, required);
+  if (!maybe_text.has_value()) {
+    return 0;
+  }
+
+  std::string text = maybe_text.value();
+  std::istringstream strm(text);
+  std::string key;
+  std::set<std::string> found_keys;
+  int count = 0;
+
+  while (strm >> key) {
+    if (found_keys.count(key)) {
+      throw mjXError(elem, "duplicate keyword: '%s'");
+      return 0;
+    }
+
+    int value = FindKey(map, mapSz, key);
+    if (value == -1) {
+      throw mjXError(elem, "invalid keyword: '%s'");
+      return 0;
+    }
+
+    found_keys.insert(key);
+    data[count++] = value;
+  }
+
+  return count;
 }
 
 
@@ -839,7 +1009,7 @@ void mjXUtil::WriteAttr(XMLElement* elem, std::string name, int n, const T* data
                         bool trim) {
   // make sure all are defined
   if constexpr (std::is_floating_point_v<T>) {
-    for (int i=0; i<n; i++) {
+    for (int i=0; i < n; i++) {
       if (std::isnan(data[i])) {
         return;
       }
@@ -863,9 +1033,9 @@ void mjXUtil::WriteAttr(XMLElement* elem, std::string name, int n, const T* data
   stream.precision(mujoco::_mjPRIVATE__get_xml_precision());
 
   // process all numbers
-  for (int i=0; i<n; i++) {
+  for (int i=0; i < n; i++) {
     // add space between numbers
-    if (i>0) {
+    if (i > 0) {
       stream << " ";
     }
 
@@ -901,7 +1071,7 @@ template void mjXUtil::WriteAttr(XMLElement* elem, std::string name, int n,
 void mjXUtil::WriteVector(XMLElement* elem, std::string name, const std::vector<double>& vec) {
   // proceed only if non-zero found
   bool ok = false;
-  for (size_t i=0; i<vec.size(); i++) {
+  for (size_t i=0; i < vec.size(); i++) {
     if (vec[i]) {
       ok = true;
       break;
@@ -921,8 +1091,8 @@ void mjXUtil::WriteVector(XMLElement* elem, std::string name, const std::vector<
                           const std::vector<double>& def) {
   // proceed only if non-zero found
   bool ok = false;
-  for (size_t i=0; i<vec.size(); i++) {
-    if (vec[i]!=def[i]) {
+  for (size_t i=0; i < vec.size(); i++) {
+    if (vec[i] != def[i]) {
       ok = true;
       break;
     }
@@ -952,7 +1122,7 @@ void mjXUtil::WriteAttrTxt(XMLElement* elem, std::string name, std::string value
 // write attribute- single int
 void mjXUtil::WriteAttrInt(XMLElement* elem, std::string name, int data, int def) {
   // skip default
-  if (data==def) {
+  if (data == def) {
     return;
   }
 
@@ -965,9 +1135,26 @@ void mjXUtil::WriteAttrInt(XMLElement* elem, std::string name, int data, int def
 void mjXUtil::WriteAttrKey(XMLElement* elem, std::string name,
                            const mjMap* map, int mapsz, int data, int def) {
   // skip default
-  if (data==def) {
+  if (data == def) {
     return;
   }
 
   WriteAttrTxt(elem, name, FindValue(map, mapsz, data));
+}
+
+
+// write attribute- space-separated keywords
+void mjXUtil::WriteAttrKeys(XMLElement* elem, std::string name, const mjMap* map,
+                            int mapsz, int* data, int ndata, int def) {
+  // skip default
+  if (ndata == 1 && data[0] == def) {
+    return;
+  }
+
+  std::string text = FindValue(map, mapsz, data[0]);
+  for (int i = 1; i < ndata; ++i) {
+    text += " " + FindValue(map, mapsz, data[i]);
+  }
+
+  WriteAttrTxt(elem, name, text);
 }

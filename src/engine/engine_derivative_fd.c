@@ -15,14 +15,14 @@
 #include "engine/engine_derivative_fd.h"
 
 #include <stddef.h>
-#include <string.h>
 
 #include <mujoco/mjdata.h>
 #include <mujoco/mjmacro.h>
 #include <mujoco/mjmodel.h>
+#include <mujoco/mjsan.h>  // IWYU pragma: keep
 #include "engine/engine_forward.h"
-#include "engine/engine_io.h"
 #include "engine/engine_inverse.h"
+#include "engine/engine_memory.h"
 #include "engine/engine_macro.h"
 #include "engine/engine_support.h"
 #include "engine/engine_util_blas.h"
@@ -42,7 +42,6 @@ static void getState(const mjModel* m, const mjData* d, mjtNum* state, mjtNum* s
 }
 
 
-
 // dx = (x2 - x1) / h
 static void diff(mjtNum* restrict dx, const mjtNum* x1, const mjtNum* x2, mjtNum h, int n) {
   mjtNum inv_h = 1/h;
@@ -50,7 +49,6 @@ static void diff(mjtNum* restrict dx, const mjtNum* x1, const mjtNum* x2, mjtNum
     dx[i] = inv_h * (x2[i] - x1[i]);
   }
 }
-
 
 
 // finite-difference two state vectors ds = (s2 - s1) / h
@@ -64,7 +62,6 @@ static void stateDiff(const mjModel* m, mjtNum* ds, const mjtNum* s1, const mjtN
     diff(ds+nv, s1+nq, s2+nq, h, nv+na);
   }
 }
-
 
 
 // finite-difference two vectors, forward, backward or centered
@@ -86,7 +83,6 @@ static void clampedDiff(mjtNum* dx, const mjtNum* x, const mjtNum* x_plus, const
 }
 
 
-
 // finite-difference two state vectors, forward, backward or centered
 static void clampedStateDiff(const mjModel* m, mjtNum* ds, const mjtNum* s, const mjtNum* s_plus,
                              const mjtNum* s_minus, mjtNum h) {
@@ -106,13 +102,11 @@ static void clampedStateDiff(const mjModel* m, mjtNum* ds, const mjtNum* s, cons
 }
 
 
-
 // check if two numbers are inside a given range
 static int inRange(const mjtNum x1, const mjtNum x2, const mjtNum* range) {
   return x1 >= range[0] && x1 <= range[1] &&
          x2 >= range[0] && x2 <= range[1];
 }
-
 
 
 // advance simulation using control callback, skipstage is mjtStage
@@ -154,7 +148,6 @@ void mj_stepSkip(const mjModel* m, mjData* d, int skipstage, int skipsensor) {
 }
 
 
-
 // compute qfrc_inverse, optionally subtracting qfrc_actuator
 static void inverseSkip(const mjModel* m, mjData* d, mjtStage stage, int skipsensor,
                         int flg_actuation, mjtNum* force) {
@@ -167,7 +160,6 @@ static void inverseSkip(const mjModel* m, mjData* d, mjtStage stage, int skipsen
 }
 
 
-
 //------------------------- derivatives of passive forces ------------------------------------------
 
 // add forward fin-diff approximation of (d qfrc_passive / d qvel) to qDeriv
@@ -175,9 +167,9 @@ void mjd_passive_velFD(const mjModel* m, mjData* d, mjtNum eps) {
   int nv = m->nv;
 
   mj_markStack(d);
-  mjtNum* qfrc_passive = mj_stackAllocNum(d, nv);
-  mjtNum* fd = mj_stackAllocNum(d, nv);
-  int* cnt = mj_stackAllocInt(d, nv);
+  mjtNum* qfrc_passive = mjSTACKALLOC(d, nv, mjtNum);
+  mjtNum* fd = mjSTACKALLOC(d, nv, mjtNum);
+  int* cnt = mjSTACKALLOC(d, nv, int);
 
   // clear row counters
   mju_zeroInt(cnt, nv);
@@ -203,8 +195,8 @@ void mjd_passive_velFD(const mjModel* m, mjData* d, mjtNum eps) {
 
     // copy to i-th column of qDeriv
     for (int j=0; j < nv; j++) {
-      int adr = d->D_rowadr[j] + cnt[j];
-      if (cnt[j] < d->D_rownnz[j] && d->D_colind[adr] == i) {
+      int adr = m->D_rowadr[j] + cnt[j];
+      if (cnt[j] < m->D_rownnz[j] && m->D_colind[adr] == i) {
         d->qDeriv[adr] = fd[j];
         cnt[j]++;
       }
@@ -218,7 +210,6 @@ void mjd_passive_velFD(const mjModel* m, mjData* d, mjtNum eps) {
 }
 
 
-
 //-------------------- derivatives of all smooth (unconstrained) forces ----------------------------
 
 // centered finite difference approximation to mjd_smooth_vel
@@ -226,10 +217,10 @@ void mjd_smooth_velFD(const mjModel* m, mjData* d, mjtNum eps) {
   int nv = m->nv;
 
   mj_markStack(d);
-  mjtNum* plus = mj_stackAllocNum(d, nv);
-  mjtNum* minus = mj_stackAllocNum(d, nv);
-  mjtNum* fd = mj_stackAllocNum(d, nv);
-  int* cnt = mj_stackAllocInt(d, nv);
+  mjtNum* plus = mjSTACKALLOC(d, nv, mjtNum);
+  mjtNum* minus = mjSTACKALLOC(d, nv, mjtNum);
+  mjtNum* fd = mjSTACKALLOC(d, nv, mjtNum);
+  int* cnt = mjSTACKALLOC(d, nv, int);
 
   // clear row counters
   mju_zeroInt(cnt, nv);
@@ -262,8 +253,8 @@ void mjd_smooth_velFD(const mjModel* m, mjData* d, mjtNum eps) {
 
     // copy to sparse qDeriv
     for (int j=0; j < nv; j++) {
-      if (cnt[j] < d->D_rownnz[j] && d->D_colind[d->D_rowadr[j]+cnt[j]] == i) {
-        d->qDeriv[d->D_rowadr[j]+cnt[j]] = fd[j];
+      if (cnt[j] < m->D_rownnz[j] && m->D_colind[m->D_rowadr[j]+cnt[j]] == i) {
+        d->qDeriv[m->D_rowadr[j]+cnt[j]] = fd[j];
         cnt[j]++;
       }
     }
@@ -271,7 +262,7 @@ void mjd_smooth_velFD(const mjModel* m, mjData* d, mjtNum eps) {
 
   // make sure final row counters equal rownnz
   for (int i=0; i < nv; i++) {
-    if (cnt[i] != d->D_rownnz[i]) {
+    if (cnt[i] != m->D_rownnz[i]) {
       mjERROR("error in constructing FD sparse derivative");
     }
   }
@@ -282,7 +273,6 @@ void mjd_smooth_velFD(const mjModel* m, mjData* d, mjtNum eps) {
 
   mj_freeStack(d);
 }
-
 
 
 //------------------------- main entry points ------------------------------------------------------
@@ -313,20 +303,20 @@ void mjd_stepFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_centered,
   unsigned int restore_spec = mjSTATE_FULLPHYSICS | mjSTATE_CTRL;
   restore_spec |= mjDISABLED(mjDSBL_WARMSTART) ? 0 : mjSTATE_WARMSTART;
 
-  mjtNum *fullstate  = mj_stackAllocNum(d, mj_stateSize(m, restore_spec));
-  mjtNum *state      = mj_stackAllocNum(d, nq+nv+na);  // current state
-  mjtNum *next       = mj_stackAllocNum(d, nq+nv+na);  // next state
-  mjtNum *next_plus  = mj_stackAllocNum(d, nq+nv+na);  // forward-nudged next state
-  mjtNum *next_minus = mj_stackAllocNum(d, nq+nv+na);  // backward-nudged next state
+  mjtNum *fullstate  = mjSTACKALLOC(d, mj_stateSize(m, restore_spec), mjtNum);
+  mjtNum *state      = mjSTACKALLOC(d, nq+nv+na, mjtNum);  // current state
+  mjtNum *next       = mjSTACKALLOC(d, nq+nv+na, mjtNum);  // next state
+  mjtNum *next_plus  = mjSTACKALLOC(d, nq+nv+na, mjtNum);  // forward-nudged next state
+  mjtNum *next_minus = mjSTACKALLOC(d, nq+nv+na, mjtNum);  // backward-nudged next state
 
   // sensors
   int skipsensor = !DsDq && !DsDv && !DsDa && !DsDu;
-  mjtNum *sensor       = skipsensor ? NULL : mj_stackAllocNum(d, ns);  // sensor values
-  mjtNum *sensor_plus  = skipsensor ? NULL : mj_stackAllocNum(d, ns);  // forward-nudged sensors
-  mjtNum *sensor_minus = skipsensor ? NULL : mj_stackAllocNum(d, ns);  // backward-nudged sensors
+  mjtNum *sensor       = skipsensor ? NULL : mjSTACKALLOC(d, ns, mjtNum);  // sensor values
+  mjtNum *sensor_plus  = skipsensor ? NULL : mjSTACKALLOC(d, ns, mjtNum);  // forward-nudged
+  mjtNum *sensor_minus = skipsensor ? NULL : mjSTACKALLOC(d, ns, mjtNum);  // backward-nudged
 
   // controls
-  mjtNum *ctrl = mj_stackAllocNum(d, nu);
+  mjtNum *ctrl = mjSTACKALLOC(d, nu, mjtNum);
 
   // save current inputs
   mj_getState(m, d, fullstate, restore_spec);
@@ -484,7 +474,7 @@ void mjd_stepFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_centered,
 
   // finite-difference positions: skip=mjSTAGE_NONE
   if (DyDq || DsDq) {
-    mjtNum *dpos  = mj_stackAllocNum(d, nv);  // allocate position perturbation
+    mjtNum *dpos  = mjSTACKALLOC(d, nv, mjtNum);  // allocate position perturbation
     for (int i=0; i < nv; i++) {
       // nudge forward
       mju_zero(dpos, nv);
@@ -537,7 +527,6 @@ void mjd_stepFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_centered,
 }
 
 
-
 // finite differenced transition matrices (control theory notation)
 //   d(x_next) = A*dx + B*du
 //   d(sensor) = C*dx + D*du
@@ -562,10 +551,10 @@ void mjd_transitionFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_cente
   mj_markStack(d);
 
   // allocate transposed matrices
-  mjtNum *AT = A ? mj_stackAllocNum(d, ndx*ndx) : NULL;  // state-transition matrix   (transposed)
-  mjtNum *BT = B ? mj_stackAllocNum(d, nu*ndx) : NULL;   // control-transition matrix (transposed)
-  mjtNum *CT = C ? mj_stackAllocNum(d, ndx*ns) : NULL;   // state-observation matrix   (transposed)
-  mjtNum *DT = D ? mj_stackAllocNum(d, nu*ns) : NULL;    // control-observation matrix (transposed)
+  mjtNum *AT = A ? mjSTACKALLOC(d, ndx*ndx, mjtNum) : NULL;  // state-transition     (transposed)
+  mjtNum *BT = B ? mjSTACKALLOC(d, nu*ndx, mjtNum) : NULL;   // control-transition   (transposed)
+  mjtNum *CT = C ? mjSTACKALLOC(d, ndx*ns, mjtNum) : NULL;   // state-observation    (transposed)
+  mjtNum *DT = D ? mjSTACKALLOC(d, nu*ns, mjtNum) : NULL;    // control-observation  (transposed)
 
   // set offset pointers
   if (A) {
@@ -628,11 +617,11 @@ void mjd_inverseFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_actuatio
 
   // local vectors
   mj_markStack(d);
-  mjtNum *pos        = mj_stackAllocNum(d, nq);                      // position
-  mjtNum *force      = mj_stackAllocNum(d, nv);                      // force
-  mjtNum *force_plus = mj_stackAllocNum(d, nv);                      // nudged force
-  mjtNum *sensor     = skipsensor ? NULL : mj_stackAllocNum(d, ns);  // sensor values
-  mjtNum *mass       = DmDq ? mj_stackAllocNum(d, nM) : NULL;        // mass matrix
+  mjtNum *pos        = mjSTACKALLOC(d, nq, mjtNum);                      // position
+  mjtNum *force      = mjSTACKALLOC(d, nv, mjtNum);                      // force
+  mjtNum *force_plus = mjSTACKALLOC(d, nv, mjtNum);                      // nudged force
+  mjtNum *sensor     = skipsensor ? NULL : mjSTACKALLOC(d, ns, mjtNum);  // sensor values
+  mjtNum *mass       = DmDq ? mjSTACKALLOC(d, nM, mjtNum) : NULL;        // mass matrix
 
   // save current positions
   mju_copy(pos, d->qpos, nq);
@@ -686,7 +675,7 @@ void mjd_inverseFD(const mjModel* m, mjData* d, mjtNum eps, mjtByte flg_actuatio
 
   // position: skip = mjSTAGE_NONE
   if (DfDq || DsDq || DmDq) {
-    mjtNum *dpos  = mj_stackAllocNum(d, nv);  // allocate position perturbation
+    mjtNum *dpos  = mjSTACKALLOC(d, nv, mjtNum);  // allocate position perturbation
     for (int i=0; i < nv; i++) {
       // nudge
       mju_zero(dpos, nv);

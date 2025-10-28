@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cmake_minimum_required(VERSION 3.16)
+set(MUJOCO_CMAKE_MIN_REQ "3.16")
+cmake_minimum_required(VERSION ${MUJOCO_CMAKE_MIN_REQ})
 
 # Make CMAKE_C_VISIBILITY_PRESET work properly.
 set(CMAKE_POLICY_DEFAULT_CMP0063 NEW)
@@ -28,7 +29,7 @@ set(MSVC_INCREMENTAL_DEFAULT ON)
 
 project(
   mujoco
-  VERSION 3.2.1
+  VERSION 3.3.8
   DESCRIPTION "MuJoCo Physics Simulator"
   HOMEPAGE_URL "https://mujoco.org"
 )
@@ -40,8 +41,31 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 option(MUJOCO_BUILD_EXAMPLES "Build samples for MuJoCo" ON)
 option(MUJOCO_BUILD_SIMULATE "Build simulate library for MuJoCo" ON)
+option(MUJOCO_BUILD_STUDIO "Build studio library for MuJoCo" OFF)
 option(MUJOCO_BUILD_TESTS "Build tests for MuJoCo" ON)
 option(MUJOCO_TEST_PYTHON_UTIL "Build and test utility libraries for Python bindings" ON)
+option(MUJOCO_WITH_USD "Build with OpenUSD" OFF)
+option(MUJOCO_USE_FILAMENT "Use filament rendering" OFF)
+option(MUJOCO_USE_FILAMENT_VULKAN "Use vulkan backend for filament rendering" OFF)
+
+# Option to provide a path to an existing USD build directory or to Houdini HFS directory.
+set(USD_DIR "" CACHE PATH "Path to an existing USD build directory.")
+set(HOUDINI_HFS_DIR "" CACHE PATH "Path to Houdini HFS directory to build USD plugins against.")
+if(USD_DIR)
+  if(EXISTS "${USD_DIR}")
+    # If the path is provided, set MUJOCO_WITH_USD to ON and add the path to CMAKE_PREFIX_PATH.
+    set(MUJOCO_WITH_USD ON CACHE BOOL "Build with OpenUSD" FORCE)
+    list(PREPEND CMAKE_PREFIX_PATH "${USD_DIR}")
+    message(STATUS "Using custom USD build directory: ${USD_DIR}")
+  else()
+    message(WARNING "Invalid path provided for USD_DIR: ${USD_DIR}")
+  endif()
+elseif(HOUDINI_HFS_DIR)
+  if(EXISTS "${HOUDINI_HFS_DIR}")
+    set(MUJOCO_WITH_USD ON CACHE BOOL "Build with OpenUSD" FORCE)
+    message(STATUS "Building Mujoco USD against Houdini HFS: ${HOUDINI_HFS_DIR}")
+  endif()
+endif()
 
 if(APPLE AND (MUJOCO_BUILD_EXAMPLES OR MUJOCO_BUILD_SIMULATE))
   enable_language(OBJC)
@@ -59,6 +83,7 @@ set(MUJOCO_HEADERS
     include/mujoco/mjmodel.h
     include/mujoco/mjplugin.h
     include/mujoco/mjrender.h
+    include/mujoco/mjsan.h
     include/mujoco/mjspec.h
     include/mujoco/mjthread.h
     include/mujoco/mjtnum.h
@@ -90,9 +115,20 @@ add_subdirectory(plugin/sdf)
 add_subdirectory(src/engine)
 add_subdirectory(src/user)
 add_subdirectory(src/xml)
-add_subdirectory(src/render)
 add_subdirectory(src/thread)
-add_subdirectory(src/ui)
+
+if(MUJOCO_USE_FILAMENT)
+  # Note that, by default, the "src/render" and "src/ui" code is added directly
+  # into the "mujoco" target. However, "mujoco::filament" is a separate,
+  # explicit target. Therefore, if you want to use MuJoCo with Filament, you
+  # will need to explicitly add the "mujoco::filament" target as a link
+  # dependency in your project.
+  add_subdirectory(src/experimental/filament)
+else()
+  add_subdirectory(src/render)
+  add_subdirectory(src/ui)
+endif()
+
 
 target_compile_definitions(mujoco PRIVATE _GNU_SOURCE CCD_STATIC_DEFINE MUJOCO_DLL_EXPORTS -DMC_IMPLEM_ENABLE)
 if(MUJOCO_ENABLE_AVX_INTRINSICS)
@@ -176,8 +212,18 @@ if(MUJOCO_BUILD_SIMULATE)
   add_subdirectory(simulate)
 endif()
 
+if(MUJOCO_BUILD_STUDIO)
+  add_subdirectory(src/experimental/toolbox)
+  add_subdirectory(src/experimental/studio)
+endif()
+
 if(MUJOCO_BUILD_EXAMPLES)
   add_subdirectory(sample)
+endif()
+
+if(MUJOCO_WITH_USD)
+  target_compile_definitions(mujoco PUBLIC mjUSEUSD)
+  add_subdirectory(src/experimental/usd)
 endif()
 
 if(BUILD_TESTING AND MUJOCO_BUILD_TESTS)

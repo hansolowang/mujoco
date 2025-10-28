@@ -17,6 +17,8 @@
 
 #include <csetjmp>
 #include <cstring>
+#include <iomanip>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,6 +53,9 @@ class MujocoErrorTestGuard {
 // By default, any MuJoCo operation which triggers a warning or error will
 // trigger a test failure.
 class MujocoTest : public ::testing::Test {
+ public:
+  ~MujocoTest() { mj_freeLastXML(); }
+
  private:
   MujocoErrorTestGuard error_guard;
 };
@@ -97,6 +102,9 @@ mjModel* LoadModelFromPath(const char* model_path);
 // Returns a string loaded from first saving the model given an input.
 std::string SaveAndReadXml(const mjModel* model);
 
+// Returns a string loaded from first saving the spec given an input.
+std::string SaveAndReadXml(const mjSpec* spec);
+
 // Adds control noise.
 std::vector<mjtNum> GetCtrlNoise(const mjModel* m, int nsteps,
                                  mjtNum ctrlnoise = 0.01);
@@ -104,6 +112,31 @@ std::vector<mjtNum> GetCtrlNoise(const mjModel* m, int nsteps,
 // Compares all fields of two mjModels.
 // Returns the name of the different field and the max difference.
 mjtNum CompareModel(const mjModel* m1, const mjModel* m2, std::string& field);
+
+// Returns a vector containing the elements of the array.
+template <typename T>
+std::vector<T> AsVector(const T* array, int n) {
+  return std::vector<T>(array, array + n);
+}
+
+// Prints a matrix to stderr, useful for debugging.
+inline void PrintMatrix(const mjtNum* mat, int nrow, int ncol, int p = 5,
+                        std::string_view name = "") {
+  std::cerr.precision(p);
+  std::cerr << name << "\n";
+  for (int r = 0; r < nrow; r++) {
+    for (int c = 0; c < ncol; c++) {
+      mjtNum val = mat[c + r*ncol];
+      if (val) {
+        std::cerr << std::fixed << std::setw(5 + p) << val << " ";
+      } else {
+        // don't print exact zeros
+        std::cerr << std::string(6 + p, ' ');
+      }
+    }
+    std::cerr << "\n";
+  }
+}
 
 // Installs a mock filesystem via a resource provider. To obtain thread safety,
 // each filesystem is scoped for individual unit tests with destructive

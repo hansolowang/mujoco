@@ -28,22 +28,29 @@ from mujoco.mjx._src.types import ConeType
 from mujoco.mjx._src.types import ConstraintType
 from mujoco.mjx._src.types import Contact
 from mujoco.mjx._src.types import Data
+from mujoco.mjx._src.types import DataJAX
 from mujoco.mjx._src.types import DisableBit
 from mujoco.mjx._src.types import EqType
 from mujoco.mjx._src.types import JointType
 from mujoco.mjx._src.types import Model
+from mujoco.mjx._src.types import ModelJAX
+from mujoco.mjx._src.types import ObjType
+from mujoco.mjx._src.types import OptionJAX
 # pylint: enable=g-importing-member
 import numpy as np
 
 
 class _Efc(PyTreeNode):
   """Support data for creating constraint matrices."""
+
   J: jax.Array
   pos_aref: jax.Array
   pos_imp: jax.Array
   invweight: jax.Array
   solref: jax.Array
   solimp: jax.Array
+  margin: jax.Array
+  frictionloss: jax.Array
 
 
 def _kbi(
@@ -104,24 +111,51 @@ def _efc_equality_connect(m: Model, d: Data) -> Optional[_Efc]:
     return None
 
   @jax.vmap
-  def rows(obj1id, obj2id, data, solref, solimp):
+  def rows(
+      is_site, obj1id, obj2id, body1id, body2id, data, solref, solimp, active
+  ):
     anchor1, anchor2 = data[0:3], data[3:6]
 
+    pos1 = d.xmat[body1id] @ anchor1 + d.xpos[body1id]
+    pos2 = d.xmat[body2id] @ anchor2 + d.xpos[body2id]
+
+    if m.nsite:
+      pos1 = jp.where(is_site, d.site_xpos[obj1id], pos1)
+      pos2 = jp.where(is_site, d.site_xpos[obj2id], pos2)
+
     # error is difference in global positions
-    pos1 = d.xmat[obj1id] @ anchor1 + d.xpos[obj1id]
-    pos2 = d.xmat[obj2id] @ anchor2 + d.xpos[obj2id]
     pos = pos1 - pos2
 
     # compute Jacobian difference (opposite of contact: 0 - 1)
-    jacp1, _ = support.jac(m, d, pos1, obj1id)
-    jacp2, _ = support.jac(m, d, pos2, obj2id)
+    jacp1, _ = support.jac(m, d, pos1, body1id)
+    jacp2, _ = support.jac(m, d, pos2, body2id)
     j = (jacp1 - jacp2).T
     pos_imp = math.norm(pos)
-    invweight = m.body_invweight0[obj1id, 0] + m.body_invweight0[obj2id, 0]
+    invweight = m.body_invweight0[body1id, 0] + m.body_invweight0[body2id, 0]
+    zero = jp.zeros_like(pos)
 
-    return _row(j, pos, pos_imp, invweight, solref, solimp)
+    efc = _row(j, pos, pos_imp, invweight, solref, solimp, zero, zero)
+    return jax.tree_util.tree_map(lambda x: x * active, efc)
 
-  args = (m.eq_obj1id, m.eq_obj2id, m.eq_data, m.eq_solref, m.eq_solimp)
+  is_site = m.eq_objtype == ObjType.SITE
+  body1id = np.copy(m.eq_obj1id)
+  body2id = np.copy(m.eq_obj2id)
+
+  if m.nsite:
+    body1id[is_site] = m.site_bodyid[m.eq_obj1id[is_site]]
+    body2id[is_site] = m.site_bodyid[m.eq_obj2id[is_site]]
+
+  args = (
+      is_site,
+      m.eq_obj1id,
+      m.eq_obj2id,
+      body1id,
+      body2id,
+      m.eq_data,
+      m.eq_solref,
+      m.eq_solimp,
+      d.eq_active,
+  )
   args = jax.tree_util.tree_map(lambda x: x[eq_id], args)
   # concatenate to drop row grouping
   return jax.tree_util.tree_map(jp.concatenate, rows(*args))
@@ -135,24 +169,42 @@ def _efc_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
     return None
 
   @jax.vmap
-  def rows(obj1id, obj2id, data, solref, solimp):
+  def rows(
+      is_site, obj1id, obj2id, body1id, body2id, data, solref, solimp, active
+  ):
     anchor1, anchor2 = data[0:3], data[3:6]
     relpose, torquescale = data[6:10], data[10]
 
     # error is difference in global position and orientation
-    pos1 = d.xmat[obj1id] @ anchor2 + d.xpos[obj1id]
-    pos2 = d.xmat[obj2id] @ anchor1 + d.xpos[obj2id]
+    pos1 = d.xmat[body1id] @ anchor2 + d.xpos[body1id]
+    pos2 = d.xmat[body2id] @ anchor1 + d.xpos[body2id]
+
+    if m.nsite:
+      pos1 = jp.where(is_site, d.site_xpos[obj1id], pos1)
+      pos2 = jp.where(is_site, d.site_xpos[obj2id], pos2)
+
     cpos = pos1 - pos2
 
     # compute Jacobian difference (opposite of contact: 0 - 1)
-    jacp1, jacr1 = support.jac(m, d, pos1, obj1id)
-    jacp2, jacr2 = support.jac(m, d, pos2, obj2id)
+    jacp1, jacr1 = support.jac(m, d, pos1, body1id)
+    jacp2, jacr2 = support.jac(m, d, pos2, body2id)
     jacdifp = jacp1 - jacp2
     jacdifr = (jacr1 - jacr2) * torquescale
 
     # compute orientation error: neg(q1) * q0 * relpose (axis components only)
-    quat = math.quat_mul(d.xquat[obj1id], relpose)
-    quat1 = math.quat_inv(d.xquat[obj2id])
+    quat = math.quat_mul(d.xquat[body1id], relpose)
+    quat1 = math.quat_inv(d.xquat[body2id])
+
+    if m.nsite:
+      quat = jp.where(
+          is_site, math.quat_mul(d.xquat[body1id], m.site_quat[obj1id]), quat
+      )
+      quat1 = jp.where(
+          is_site,
+          math.quat_inv(math.quat_mul(d.xquat[body2id], m.site_quat[obj2id])),
+          quat1,
+      )
+
     crot = math.quat_mul(quat1, quat)[1:]  # copy axis components
 
     pos = jp.concatenate((cpos, crot * torquescale))
@@ -162,12 +214,32 @@ def _efc_equality_weld(m: Model, d: Data) -> Optional[_Efc]:
     jacdifr = 0.5 * jax.vmap(jac_fn)(jacdifr)
     j = jp.concatenate((jacdifp.T, jacdifr.T))
     pos_imp = math.norm(pos)
-    invweight = m.body_invweight0[obj1id] + m.body_invweight0[obj2id]
+    invweight = m.body_invweight0[body1id] + m.body_invweight0[body2id]
     invweight = jp.repeat(invweight, 3, axis=0)
+    zero = jp.zeros_like(pos)
 
-    return _row(j, pos, pos_imp, invweight, solref, solimp)
+    efc = _row(j, pos, pos_imp, invweight, solref, solimp, zero, zero)
+    return jax.tree_util.tree_map(lambda x: x * active, efc)
 
-  args = (m.eq_obj1id, m.eq_obj2id, m.eq_data, m.eq_solref, m.eq_solimp)
+  is_site = m.eq_objtype == ObjType.SITE
+  body1id = np.copy(m.eq_obj1id)
+  body2id = np.copy(m.eq_obj2id)
+
+  if m.nsite:
+    body1id[is_site] = m.site_bodyid[m.eq_obj1id[is_site]]
+    body2id[is_site] = m.site_bodyid[m.eq_obj2id[is_site]]
+
+  args = (
+      is_site,
+      m.eq_obj1id,
+      m.eq_obj2id,
+      body1id,
+      body2id,
+      m.eq_data,
+      m.eq_solref,
+      m.eq_solimp,
+      d.eq_active,
+  )
   args = jax.tree_util.tree_map(lambda x: x[eq_id], args)
   # concatenate to drop row grouping
   return jax.tree_util.tree_map(jp.concatenate, rows(*args))
@@ -182,7 +254,9 @@ def _efc_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
     return None
 
   @jax.vmap
-  def rows(obj2id, data, solref, solimp, dofadr1, dofadr2, qposadr1, qposadr2):
+  def rows(
+      obj2id, data, solref, solimp, active, dofadr1, dofadr2, qposadr1, qposadr2
+  ):
     pos1, pos2 = d.qpos[qposadr1], d.qpos[qposadr2]
     ref1, ref2 = m.qpos0[qposadr1], m.qpos0[qposadr2]
     dif = (pos2 - ref2) * (obj2id > -1)
@@ -193,10 +267,13 @@ def _efc_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
     j = jp.zeros((m.nv)).at[dofadr2].set(-deriv).at[dofadr1].set(1.0)
     invweight = m.dof_invweight0[dofadr1]
     invweight += m.dof_invweight0[dofadr2] * (obj2id > -1)
+    zero = jp.zeros_like(pos)
 
-    return _row(j, pos, pos, invweight, solref, solimp)
+    efc = _row(j, pos, pos, invweight, solref, solimp, zero, zero)
+    return jax.tree_util.tree_map(lambda x: x * active, efc)
 
   args = (m.eq_obj1id, m.eq_obj2id, m.eq_data, m.eq_solref, m.eq_solimp)
+  args += (d.eq_active,)
   args = jax.tree_util.tree_map(lambda x: x[eq_id], args)
   dofadr1, dofadr2 = m.jnt_dofadr[args[0]], m.jnt_dofadr[args[1]]
   qposadr1, qposadr2 = m.jnt_qposadr[args[0]], m.jnt_qposadr[args[1]]
@@ -207,13 +284,17 @@ def _efc_equality_joint(m: Model, d: Data) -> Optional[_Efc]:
 
 def _efc_equality_tendon(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for tendon equality constraints."""
+  if not isinstance(m._impl, ModelJAX) or not isinstance(d._impl, DataJAX):
+    raise ValueError(
+        '_efc_equality_tendon requires JAX backend implementation.'
+    )
 
   eq_id = np.nonzero(m.eq_type == EqType.TENDON)[0]
 
   if (m.opt.disableflags & DisableBit.EQUALITY) or eq_id.size == 0:
     return None
 
-  obj1id, obj2id, data, solref, solimp = jax.tree_util.tree_map(
+  obj1id, obj2id, data, solref, solimp, active = jax.tree_util.tree_map(
       lambda x: x[eq_id],
       (
           m.eq_obj1id,
@@ -221,32 +302,65 @@ def _efc_equality_tendon(m: Model, d: Data) -> Optional[_Efc]:
           m.eq_data,
           m.eq_solref,
           m.eq_solimp,
+          d.eq_active,
       ),
   )
 
   @jax.vmap
-  def rows(obj2id, data, solref, solimp, invweight, jac1, jac2, pos1, pos2):
+  def rows(
+      obj2id, data, solref, solimp, invweight, jac1, jac2, pos1, pos2, active
+  ):
     dif = pos2 * (obj2id > -1)
     dif_power = jp.power(dif, jp.arange(0, 5))
     pos = pos1 - jp.dot(data[:5], dif_power)
     deriv = jp.dot(data[1:5], dif_power[:4] * jp.arange(1, 5)) * (obj2id > -1)
     j = jac1 + jac2 * -deriv
+    zero = jp.zeros_like(pos)
 
-    return _row(j, pos, pos, invweight, solref, solimp)
+    efc = _row(j, pos, pos, invweight, solref, solimp, zero, zero)
+    return jax.tree_util.tree_map(lambda x: x * active, efc)
 
   inv1, inv2 = m.tendon_invweight0[obj1id], m.tendon_invweight0[obj2id]
-  jac1, jac2 = d.ten_J[obj1id], d.ten_J[obj2id]
+  jac1, jac2 = d._impl.ten_J[obj1id], d._impl.ten_J[obj2id]
   pos1 = d.ten_length[obj1id] - m.tendon_length0[obj1id]
   pos2 = d.ten_length[obj2id] - m.tendon_length0[obj2id]
   invweight = inv1 + inv2 * (obj2id > -1)
 
-  return rows(obj2id, data, solref, solimp, invweight, jac1, jac2, pos1, pos2)
+  return rows(
+      obj2id, data, solref, solimp, invweight, jac1, jac2, pos1, pos2, active
+  )
 
 
 def _efc_friction(m: Model, d: Data) -> Optional[_Efc]:
-  # TODO(robotics-team): implement _instantiate_friction
-  del m, d
-  return None
+  """Calculates constraint rows for dof frictionloss."""
+  if not isinstance(m._impl, ModelJAX) or not isinstance(d._impl, DataJAX):
+    raise ValueError('_efc_friction requires JAX backend implementation.')
+
+  dof_id = np.nonzero(m._impl.dof_hasfrictionloss)[0]
+  tendon_id = np.nonzero(m._impl.tendon_hasfrictionloss)[0]
+
+  size = dof_id.size + tendon_id.size
+  if (m.opt.disableflags & DisableBit.FRICTIONLOSS) or (size == 0):
+    return None
+
+  args_dof = (jp.eye(m.nv), m.dof_frictionloss, m.dof_invweight0, m.dof_solref)
+  args_dof += (m.dof_solimp,)
+  args_dof = jax.tree_util.tree_map(lambda x: x[dof_id], args_dof)
+
+  args_ten = (d._impl.ten_J, m.tendon_frictionloss, m.tendon_invweight0)
+  args_ten += (m.tendon_solref_fri, m.tendon_solimp_fri)
+  args_ten = jax.tree_util.tree_map(lambda x: x[tendon_id], args_ten)
+
+  args = jax.tree_util.tree_map(
+      lambda *x: jp.concatenate(x), args_dof, args_ten
+  )
+
+  @jax.vmap
+  def rows(j, frictionloss, invweight, solref, solimp):
+    z = jp.zeros_like(frictionloss)
+    return _row(j, z, z, invweight, solref, solimp, z, frictionloss)
+
+  return rows(*args)
 
 
 def _efc_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
@@ -266,8 +380,11 @@ def _efc_limit_ball(m: Model, d: Data) -> Optional[_Efc]:
     active = pos < 0
     j = jp.zeros(m.nv).at[jp.arange(3) + dofadr].set(-axis)
     invweight = m.dof_invweight0[dofadr]
+    z = jp.zeros_like(pos)
 
-    return _row(j * active, pos * active, pos, invweight, solref, solimp)
+    return _row(
+        j * active, pos * active, pos, invweight, solref, solimp, jnt_margin, z
+    )
 
   args = (m.jnt_qposadr, m.jnt_dofadr, m.jnt_range, m.jnt_margin, m.jnt_solref)
   args += (m.jnt_solimp,)
@@ -293,8 +410,11 @@ def _efc_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
     active = pos < 0
     j = jp.zeros(m.nv).at[dofadr].set((dist_min < dist_max) * 2 - 1)
     invweight = m.dof_invweight0[dofadr]
+    z = jp.zeros_like(pos)
 
-    return _row(j * active, pos * active, pos, invweight, solref, solimp)
+    return _row(
+        j * active, pos * active, pos, invweight, solref, solimp, jnt_margin, z
+    )
 
   args = (m.jnt_qposadr, m.jnt_dofadr, m.jnt_range, m.jnt_margin, m.jnt_solref)
   args += (m.jnt_solimp,)
@@ -305,6 +425,9 @@ def _efc_limit_slide_hinge(m: Model, d: Data) -> Optional[_Efc]:
 
 def _efc_limit_tendon(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for tendon limits."""
+  if not isinstance(m._impl, ModelJAX) or not isinstance(d._impl, DataJAX):
+    raise ValueError('_efc_limit_tendon requires JAX backend implementation.')
+
   tendon_id = np.nonzero(m.tendon_limited)[0]
 
   if (m.opt.disableflags & DisableBit.LIMIT) or tendon_id.size == 0:
@@ -314,7 +437,7 @@ def _efc_limit_tendon(m: Model, d: Data) -> Optional[_Efc]:
       lambda x: x[tendon_id],
       (
           d.ten_length,
-          d.ten_J,
+          d._impl.ten_J,
           m.tendon_range,
           m.tendon_margin,
           m.tendon_invweight0,
@@ -327,14 +450,21 @@ def _efc_limit_tendon(m: Model, d: Data) -> Optional[_Efc]:
   pos = jp.minimum(dist_min, dist_max) - margin
   active = pos < 0
   j = jax.vmap(jp.multiply)(j, ((dist_min < dist_max) * 2 - 1) * active)
+  zero = jp.zeros_like(pos)
 
-  return jax.vmap(_row)(j, pos * active, pos, invweight, solref, solimp)
+  return jax.vmap(_row)(
+      j, pos * active, pos, invweight, solref, solimp, margin, zero
+  )
 
 
 def _efc_contact_frictionless(m: Model, d: Data) -> Optional[_Efc]:
   """Calculates constraint rows for frictionless contacts."""
+  if not isinstance(m._impl, ModelJAX) or not isinstance(d._impl, DataJAX):
+    raise ValueError(
+        '_efc_contact_frictionless requires JAX backend implementation.'
+    )
 
-  con_id = np.nonzero(d.contact.dim == 1)[0]
+  con_id = np.nonzero(d._impl.contact.dim == 1)[0]
 
   if con_id.size == 0:
     return None
@@ -349,17 +479,34 @@ def _efc_contact_frictionless(m: Model, d: Data) -> Optional[_Efc]:
     j = (c.frame @ (jac2p - jac1p).T)[0]
     invweight = m.body_invweight0[body1, 0] + m.body_invweight0[body2, 0]
 
-    return _row(j * active, pos * active, pos, invweight, c.solref, c.solimp)
+    return _row(
+        j * active,
+        pos * active,
+        pos,
+        invweight,
+        c.solref,
+        c.solimp,
+        c.includemargin,
+        jp.zeros_like(pos),
+    )
 
-  contact = jax.tree_util.tree_map(lambda x: x[con_id], d.contact)
+  contact = jax.tree_util.tree_map(lambda x: x[con_id], d._impl.contact)
 
   return rows(contact)
 
 
 def _efc_contact_pyramidal(m: Model, d: Data, condim: int) -> Optional[_Efc]:
   """Calculates constraint rows for frictional pyramidal contacts."""
+  if (
+      not isinstance(m._impl, ModelJAX)
+      or not isinstance(d._impl, DataJAX)
+      or not isinstance(m.opt._impl, OptionJAX)
+  ):
+    raise ValueError(
+        '_efc_contact_pyramidal requires JAX backend implementation.'
+    )
 
-  con_id = np.nonzero(d.contact.dim == condim)[0]
+  con_id = np.nonzero(d._impl.contact.dim == condim)[0]
 
   if con_id.size == 0:
     return None
@@ -385,17 +532,34 @@ def _efc_contact_pyramidal(m: Model, d: Data, condim: int) -> Optional[_Efc]:
     invweight = invweight + fri[0] * fri[0] * invweight
     invweight = invweight * 2 * fri[0] * fri[0] / m.opt.impratio
 
-    return _row(j * active, pos * active, pos, invweight, c.solref, c.solimp)
+    return _row(
+        j * active,
+        pos * active,
+        pos,
+        invweight,
+        c.solref,
+        c.solimp,
+        c.includemargin,
+        jp.zeros_like(pos),
+    )
 
-  contact = jax.tree_util.tree_map(lambda x: x[con_id], d.contact)
+  contact = jax.tree_util.tree_map(lambda x: x[con_id], d._impl.contact)
   # concatenate to drop row grouping
   return jax.tree_util.tree_map(jp.concatenate, rows(contact))
 
 
 def _efc_contact_elliptic(m: Model, d: Data, condim: int) -> Optional[_Efc]:
   """Calculates constraint rows for frictional elliptic contacts."""
+  if (
+      not isinstance(m._impl, ModelJAX)
+      or not isinstance(d._impl, DataJAX)
+      or not isinstance(m.opt._impl, OptionJAX)
+  ):
+    raise ValueError(
+        '_efc_contact_elliptic requires JAX backend implementation.'
+    )
 
-  con_id = np.nonzero(d.contact.dim == condim)[0]
+  con_id = np.nonzero(d._impl.contact.dim == condim)[0]
 
   if con_id.size == 0:
     return None
@@ -421,9 +585,18 @@ def _efc_contact_elliptic(m: Model, d: Data, condim: int) -> Optional[_Efc]:
     invweight = jp.concatenate((invweight, invweight[1] * fri))
     pos_aref = jp.zeros(condim).at[0].set(pos)
 
-    return _row(j * active, pos_aref * active, pos, invweight, solref, c.solimp)
+    return _row(
+        j * active,
+        pos_aref * active,
+        pos,
+        invweight,
+        solref,
+        c.solimp,
+        c.includemargin,
+        jp.zeros_like(pos),
+    )
 
-  contact = jax.tree_util.tree_map(lambda x: x[con_id], d.contact)
+  contact = jax.tree_util.tree_map(lambda x: x[con_id], d._impl.contact)
   # concatenate to drop row grouping
   return jax.tree_util.tree_map(jp.concatenate, rows(contact))
 
@@ -431,7 +604,8 @@ def _efc_contact_elliptic(m: Model, d: Data, condim: int) -> Optional[_Efc]:
 def counts(efc_type: np.ndarray) -> Tuple[int, int, int, int]:
   """Returns equality, friction, limit, and contact constraint counts."""
   ne = (efc_type == ConstraintType.EQUALITY).sum()
-  nf = 0  # no support for friction loss yet
+  nf = (efc_type == ConstraintType.FRICTION_DOF).sum()
+  nf += (efc_type == ConstraintType.FRICTION_TENDON).sum()
   nl = (efc_type == ConstraintType.LIMIT_JOINT).sum()
   nl += (efc_type == ConstraintType.LIMIT_TENDON).sum()
   nc_f = (efc_type == ConstraintType.CONTACT_FRICTIONLESS).sum()
@@ -458,6 +632,20 @@ def make_efc_type(
     num_rows += (m.eq_type == EqType.JOINT).sum()
     num_rows += (m.eq_type == EqType.TENDON).sum()
     efc_types += [ConstraintType.EQUALITY] * num_rows
+
+  if not m.opt.disableflags & DisableBit.FRICTIONLOSS:
+    nf_dof = (
+        m._impl.dof_hasfrictionloss.sum()
+        if isinstance(m, Model) and isinstance(m._impl, ModelJAX)
+        else (m.dof_frictionloss > 0).sum()
+    )
+    efc_types += [ConstraintType.FRICTION_DOF] * nf_dof
+    nf_tendon = (
+        m._impl.tendon_hasfrictionloss.sum()
+        if isinstance(m, Model) and isinstance(m._impl, ModelJAX)
+        else (m.tendon_frictionloss > 0).sum()
+    )
+    efc_types += [ConstraintType.FRICTION_TENDON] * nf_tendon
 
   if not m.opt.disableflags & DisableBit.LIMIT:
     efc_types += [ConstraintType.LIMIT_JOINT] * m.jnt_limited.sum()
@@ -528,8 +716,14 @@ def make_constraint(m: Model, d: Data) -> Data:
 
   if not efcs:
     z = jp.empty(0)
-    d = d.replace(efc_J=jp.empty((0, m.nv)))
-    d = d.replace(efc_D=z, efc_aref=z, efc_frictionloss=z)
+    d = d.tree_replace({'_impl.efc_J': jp.empty((0, m.nv))})
+    d = d.tree_replace({
+        '_impl.efc_D': z,
+        '_impl.efc_aref': z,
+        '_impl.efc_frictionloss': z,
+        '_impl.efc_pos': z,
+        '_impl.efc_margin': z,
+    })
     return d
 
   efc = jax.tree_util.tree_map(lambda *x: jp.concatenate(x), *efcs)
@@ -539,10 +733,16 @@ def make_constraint(m: Model, d: Data) -> Data:
     k, b, imp = _kbi(m, efc.solref, efc.solimp, efc.pos_imp)
     r = jp.maximum(efc.invweight * (1 - imp) / imp, mujoco.mjMINVAL)
     aref = -b * (efc.J @ d.qvel) - k * imp * efc.pos_aref
-    return aref, r
+    return aref, r, efc.pos_aref + efc.margin, efc.margin, efc.frictionloss
 
-  aref, r = fn(efc)
-  d = d.replace(efc_J=efc.J, efc_D=1 / r, efc_aref=aref)
-  d = d.replace(efc_frictionloss=jp.zeros_like(r))
+  aref, r, pos, margin, frictionloss = fn(efc)
+  d = d.tree_replace({
+      '_impl.efc_J': efc.J,
+      '_impl.efc_D': 1 / r,
+      '_impl.efc_aref': aref,
+      '_impl.efc_pos': pos,
+      '_impl.efc_margin': margin,
+  })
+  d = d.tree_replace({'_impl.efc_frictionloss': frictionloss})
 
   return d

@@ -267,7 +267,7 @@ control laws obtained from trajectory optimizers would normally be indexed by ``
 The reason for the "official" caveat above is because user callbacks may store additional state variables that change
 over time and affect the callback outputs; indeed the field ``mjData.userdata`` exists mostly for that purpose. Other
 state-like quantities that are part of mjData and are treated as inputs by forward dynamics are ``mjData.mocap_pos`` and
-mjData.mocap_quat. These quantities are unusual in that they are meant to change at each time step (normally driven by a
+``mjData.mocap_quat``. These quantities are unusual in that they are meant to change at each time step (normally driven by a
 motion capture device), however this change is implemented by the user, while the simulator treats them as constants. In
 that sense they are no different from all the constants in mjModel, or the function callback pointers set by the user:
 such constants affect the computation, but are not part of the state vector of a dynamical system.
@@ -286,7 +286,7 @@ Next we turn to the controls and applied forces. The control vector in MuJoCo is
      u = (mjData.ctrl, mjData.qfrc_applied, mjData.xfrc_applied)
 
 These quantities specify control signals (``mjData.ctrl``) for the actuators defined in the model, or directly apply
-forces and torques specified in joint space (``mjData.qfrc_applied``) or in Cartesian space (mjData.xfrc_applied).
+forces and torques specified in joint space (``mjData.qfrc_applied``) or in Cartesian space (``mjData.xfrc_applied``).
 
 Finally, calling mj_forward which corresponds to the abstract dynamics function ``f(t,x,u)`` computes the
 time-derivative of the state vector. The corresponding fields of mjData are
@@ -556,6 +556,13 @@ or termination of the iterative solver.
 Model changes
 ~~~~~~~~~~~~~
 
+.. admonition:: Model editing framework
+   :class: tip
+
+   The discussion below regarding mjModel changes at runtime was written before the 3.2.0 introduction of the
+   :doc:`Model Editing<modeledit>` framework. It is still valid, but the new framework is the safe and recommended way
+   to modify models.
+
 The MuJoCo model contained in mjModel is supposed to represent constant physical properties of the system, and in
 theory should not change after compilation. Of course in practice things are not that simple. It is often desirable to
 change the physics options in ``mjModel.opt``, so as to experiment with different aspects of the physics or to create
@@ -567,7 +574,7 @@ because that may result in incorrect sizes or indexing. This rule does not hold 
 parameters such as inertias are expected to obey certain properties. On the other hand, some structural parameters
 such as object types may be possible to change, but that depends on whether any sizes or indexes depend on them.
 Arrays of type mjtByte can be changed safely, since they are binary indicators that enable and disable certain
-features. The only exception here is ``mjModel.tex_rgb`` which is texture data represented as mjtByte.
+features. The only exception here is ``mjModel.tex_data`` which is texture data represented as mjtByte.
 
 When changing mjModel fields that corresponds to resources uploaded to the GPU, the user must also call the
 corresponding upload function: ``mjr_uploadTexture``, ``mjr_uploadMesh``, ``mjr_uploadHField``. Otherwise the data used
@@ -590,8 +597,8 @@ asking a "decompiler" to make corresponding changes to the C code -- it is just 
 
 .. _siLayout:
 
-Data layout and buffer allocation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Data layout
+~~~~~~~~~~~
 
 All matrices in MuJoCo are in **row-major** format. For example, the linear memory array (a0, a1, ... a5) represents the
 2-by-3 matrix
@@ -607,12 +614,15 @@ essential to keep it in mind at all times. All MuJoCo utility functions that ope
 :ref:`mju_mulMatMat`, :ref:`mju_mulMatVec` etc. assume this matrix layout. For vectors there is of course no
 difference between row-major and column-major formats.
 
+.. TODO(tassa): update this section when qM is migrated to CSR.
+
 When possible, MuJoCo exploits sparsity. This can make all the difference between O(N) and O(N^3) scaling. The inertia
-matrix ``mjData.qM`` and its LTDL factorization ``mjData.qLD`` are always represented as sparse, using a custom
-indexing format designed for matrices that correspond to tree topology. The functions :ref:`mj_factorM`,
-:ref:`mj_solveM`, :ref:`mj_solveM2` and :ref:`mj_mulM` are used for sparse factorization, substitution and
-matrix-vector multiplication. The user can also convert these matrices to dense format with the function
-:ref:`mj_fullM` although MuJoCo never does that internally.
+matrix ``mjData.qM`` and its LTDL factorization ``mjData.qLD`` are always represented as sparse. ``qM`` uses a custom
+indexing format designed for matrices that correspond to tree topology, while ``qLD`` uses the standard CSR format.
+``qM`` will be migrated to CSR in and upcoming change. The functions :ref:`mj_factorM`, :ref:`mj_solveM`,
+:ref:`mj_solveM2` and :ref:`mj_mulM` are used for sparse factorization, substitution and matrix-vector multiplication.
+The user can also convert these matrices to dense format with the function :ref:`mj_fullM` although MuJoCo never does
+that internally.
 
 The constraint Jacobian matrix ``mjData.efc_J`` is represented as sparse whenever the sparse Jacobian option is
 enabled. The function :ref:`mj_isSparse` can be used to determine if sparse format is currently in use. In that case
@@ -712,8 +722,8 @@ and :ref:`mj_stackAllocByte` is provided for allocation of arbitrary number of b
 
 .. _siError:
 
-Errors, warnings, memory allocation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Errors and warnings
+~~~~~~~~~~~~~~~~~~~
 
 When a terminal error occurs, MuJoCo calls the function :ref:`mju_error` internally. Here is what mju_error does:
 
@@ -797,7 +807,7 @@ to implement high-resolution timers in C without bringing in additional dependen
 does not need timing, and in that case there is no reason to call timing functions.
 
 One part of the simulation pipeline that needs to be monitored closely is the iterative constraint solver. The
-simplest diagnostic here is ``mjData.solver_iter`` which shows how many iterations the solver took on the last call to
+simplest diagnostic here is ``mjData.solver_niter`` which shows how many iterations the solver took on the last call to
 mj_step or ``mj_forward``. Note that the solver has tolerance parameters for early termination, so this number is
 usually smaller than the maximum number of iterations allowed. The array ``mjData.solver`` contains one
 :ref:`mjSolverStat` data structure per iteration of the constraint solver, with information about the constraint state
@@ -903,7 +913,7 @@ elliptic, depending on which solver is selected in ``mjModel.opt``. The function
 can be used to determine which friction cone type is used. For pyramidal cones, the interpretation of the contact force
 (whose address we computed above) is non-trivial, because the components are forces along redundant non-orthogonal axes
 corresponding to the edges of the pyramid. The function :ref:`mj_contactForce` can be
-used to convert the force generated by a given contact into a more intuitive format: a 3D force followed by a 3D toque.
+used to convert the force generated by a given contact into a more intuitive format: a 3D force followed by a 3D torque.
 The torque component will be zero when :at:`condim` is 1 or 3, and non-zero otherwise. This force and torque are
 expressed in the contact frame given by mjContact.frame. Unlike all other matrices in mjData, this matrix is stored in
 transposed form. Normally a 3-by-3 matrix corresponding to a coordinate frame would have the frame axes along the

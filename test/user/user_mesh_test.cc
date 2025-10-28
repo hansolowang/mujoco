@@ -14,7 +14,9 @@
 
 // Tests for user/user_objects.cc.
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -42,14 +44,16 @@ static const char* const kDuplicateVerticesPath =
     "user/testdata/duplicate_vertices.xml";
 static const char* const kCubePath =
     "user/testdata/cube.xml";
+static const char* const kCubeCompletePath =
+    "user/testdata/cube_complete.obj";
 static const char* const kTorusPath =
     "user/testdata/torus.xml";
 static const char* const kTorusMaxhullVertPath =
     "user/testdata/torus_maxhullvert.xml";
 static const char* const kTorusDefaultMaxhullVertPath =
     "user/testdata/torus_maxhullvert_default.xml";
-static const char* const kTorusShellPath =
-    "user/testdata/torus_shell.xml";
+static const char* const kCompareInertiaPath =
+    "user/testdata/inertia_compare.xml";
 static const char* const kConvexInertiaPath =
     "user/testdata/inertia_convex.xml";
 static const char* const kConcaveInertiaPath =
@@ -64,16 +68,15 @@ static const char* const kDuplicateOBJPath =
     "user/testdata/duplicate.xml";
 static const char* const kMalformedFaceOBJPath =
     "user/testdata/malformed_face.xml";
-
-std::vector<mjtNum> AsVector(const mjtNum* array, int n) {
-  return std::vector<mjtNum>(array, array + n);
-}
+static const char* const kCubeSkinPath =
+    "user/testdata/cube_skin.xml";
 
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsNull;
 using ::testing::NotNull;
-using ::testing::StartsWith;
+
+static constexpr mjtNum kMaxAbsErr = std::numeric_limits<float>::epsilon();
 
 // ------------- test invalid filenames ----------------------------------------
 
@@ -88,6 +91,7 @@ TEST_F(MjCMeshTest, UnknownMeshFormat) {
       </worldbody>
     </mujoco>
   )";
+
   std::vector<std::string> invalid_names = {
     "noextension",
     "anobj",
@@ -95,16 +99,22 @@ TEST_F(MjCMeshTest, UnknownMeshFormat) {
     "mesh.exe",
     "file%s"
   };
+  mjVFS vfs;
+  mj_defaultVFS(&vfs);
+
   for (const auto& name : invalid_names) {
+    mj_addBufferVFS(&vfs, name.c_str(), nullptr, 0);
     std::string xml = absl::StrFormat(xml_format, name);
     std::array<char, 1024> error;
     mjModel* model =
-        LoadModelFromString(xml.c_str(), error.data(), error.size());
+        LoadModelFromString(xml.c_str(), error.data(), error.size(), &vfs);
     ASSERT_THAT(model, testing::IsNull())
         << "Should fail to load a mesh named: " << name;
-    EXPECT_THAT(error.data(), HasSubstr("unknown mesh content type for file"));
+    EXPECT_THAT(error.data(), HasSubstr("unknown or unsupported mesh file: "));
     EXPECT_THAT(error.data(), HasSubstr(name));
   }
+
+  mj_deleteVFS(&vfs);
 }
 
 // -------------------- test OS filesystem fallback ----------------------------
@@ -283,14 +293,42 @@ TEST_F(MjCMeshTest, LoadMSHWithContentTypeError) {
   size_t error_sz = 1024;
 
   // load VFS on the heap
-  auto vfs = std::make_unique<mjVFS>();
-  mj_defaultVFS(vfs.get());
+  mjVFS vfs;
+  mj_defaultVFS(&vfs);
+  mj_addBufferVFS(&vfs, "some_file", nullptr, 0);
 
   // should error with unknown file type
-  mjModel* model = LoadModelFromString(xml, error, error_sz, vfs.get());
+  mjModel* model = LoadModelFromString(xml, error, error_sz, &vfs);
   EXPECT_THAT(model, IsNull());
-  EXPECT_THAT(error, HasSubstr("unsupported content type: 'model/unknown'"));
-  mj_deleteVFS(vfs.get());
+  EXPECT_THAT(error, HasSubstr("unsupported mesh type: 'model/unknown'"));
+  mj_deleteVFS(&vfs);
+}
+
+TEST_F(MjCMeshTest, LoadMSHWithInvalidContentType) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="mesh1" content_type="model" file="some_file"/>
+    </asset>
+    <worldbody>
+      <geom type="mesh" mesh="mesh1"/>
+    </worldbody>
+  </mujoco>
+  )";
+
+  char error[1024];
+  size_t error_sz = 1024;
+
+  // load VFS on the heap
+  mjVFS vfs;
+  mj_defaultVFS(&vfs);
+  mj_addBufferVFS(&vfs, "some_file", nullptr, 0);
+
+  // should error with unknown file type
+  mjModel* model = LoadModelFromString(xml, error, error_sz, &vfs);
+  EXPECT_THAT(model, IsNull());
+  EXPECT_THAT(error, HasSubstr("invalid content type: 'model'"));
+  mj_deleteVFS(&vfs);
 }
 
 TEST_F(MjCMeshTest, LoadMSHWithContentTypeParam) {
@@ -326,6 +364,7 @@ TEST_F(MjCMeshTest, DeduplicateSTLVertices) {
   char error[1024];
   size_t error_sz = 1024;
   mjModel* model = mj_loadXML(xml_path.c_str(), 0, error, error_sz);
+  ASSERT_THAT(model, NotNull()) << error;
   ASSERT_EQ(model->nmeshvert, 4);
   mj_deleteModel(model);
 }
@@ -335,8 +374,7 @@ TEST_F(MjCMeshTest, DeduplicateSTLVertices) {
 TEST_F(MjCMeshTest, LoadMSH) {
   const std::string xml_path = GetTestDataFilePath(kMeshPath);
   char error[1024];
-  size_t error_sz = 1024;
-  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error, error_sz);
+  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error, sizeof(error));
   ASSERT_THAT(model, NotNull()) << error;
   ASSERT_EQ(model->nmeshvert, 36);
   mj_deleteModel(model);
@@ -416,8 +454,9 @@ TEST_F(MjCMeshTest, TinyMeshLoads) {
     </worldbody>
   </mujoco>
   )";
-  mjModel* model = LoadModelFromString(xml);
-  ASSERT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   mj_deleteModel(model);
 }
 
@@ -456,8 +495,9 @@ TEST_F(MjCMeshTest, FaceNormalAutogenerated) {
     </worldbody>
   </mujoco>
   )";
-  mjModel* model = LoadModelFromString(xml);
-  ASSERT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   mj_deleteModel(model);
 }
 
@@ -478,9 +518,9 @@ TEST_F(MjCMeshTest, SmallInertiaLoads) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  ASSERT_THAT(model, NotNull()) << error.data();
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   mj_deleteModel(model);
 }
 
@@ -491,7 +531,7 @@ TEST_F(MjCMeshTest, TinyInertiaFails) {
       <mesh name="tiny" vertex="0 0 0  1e-4 0 0  0 1e-4 0  0 0 1e-4"/>
     </asset>
     <worldbody>
-      <body>
+      <body name="tiny_body">
         <freejoint/>
         <geom type="mesh" mesh="tiny"/>
       </body>
@@ -504,23 +544,35 @@ TEST_F(MjCMeshTest, TinyInertiaFails) {
       error.data(),
       HasSubstr(
           "mass and inertia of moving bodies must be larger than mjMINVAL"));
+  EXPECT_THAT(error.data(), HasSubstr("Element name 'tiny_body'"));
 }
 
-TEST_F(MjCMeshTest, FlippedFaceAllowedInexactInertia) {
+TEST_F(MjCMeshTest, FlippedFaceAllowedLegacyInertia) {
   const std::string xml_path = GetTestDataFilePath(kMalformedFaceOBJPath);
-  std::array<char, 1024> error;
-  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error.data(), error.size());
-  EXPECT_THAT(model, testing::NotNull());
+  char error[1024];
+  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   EXPECT_THAT(model->nmeshface, 4);
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, MissingFaceAllowedConvexInertia) {
+  const std::string xml_path = GetTestDataFilePath(kCompareInertiaPath);
+  char error[1024];
+  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  EXPECT_THAT(model->nmeshface, 7);
+  EXPECT_NEAR(model->body_inertia[3], model->body_inertia[6], kMaxAbsErr);
+  EXPECT_NEAR(model->body_inertia[4], model->body_inertia[7], kMaxAbsErr);
+  EXPECT_NEAR(model->body_inertia[5], model->body_inertia[8], kMaxAbsErr);
   mj_deleteModel(model);
 }
 
 TEST_F(MjCMeshTest, FlippedFaceFailsExactInertia) {
   static constexpr char xml[] = R"(
   <mujoco>
-    <compiler exactmeshinertia="true"/>
     <asset>
-      <mesh name="example_mesh"
+      <mesh name="example_mesh" inertia="exact"
         vertex="0 0 0  1 0 0  0 1 0  0 0 1"
         face="2 0 3  0 1 3  1 2 3  0 1 2" />
     </asset>
@@ -567,9 +619,9 @@ TEST_F(MjCMeshTest, FlippedFaceAllowedWorld) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   CheckTetrahedronWasRescaled(model);
   mj_deleteModel(model);
 }
@@ -589,9 +641,9 @@ TEST_F(MjCMeshTest, FlippedFaceAllowedNoMass) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull()) << error.data();
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   CheckTetrahedronWasRescaled(model);
   mj_deleteModel(model);
 }
@@ -612,9 +664,9 @@ TEST_F(MjCMeshTest, FlippedFaceAllowedInertial) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   CheckTetrahedronWasRescaled(model);
   mj_deleteModel(model);
 }
@@ -634,26 +686,11 @@ TEST_F(MjCMeshTest, FlippedFaceAllowedNegligibleArea) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   CheckTetrahedronWasRescaled(model);
   mj_deleteModel(model);
-}
-
-TEST_F(MjCMeshTest, ShellUsesVolumeFrame) {
-  const std::string xml_path_v = GetTestDataFilePath(kTorusPath);
-  const std::string xml_path_s = GetTestDataFilePath(kTorusShellPath);
-  std::array<char, 1024> error;
-  mjModel* mv = mj_loadXML(xml_path_v.c_str(), 0, error.data(), error.size());
-  mjModel* ms = mj_loadXML(xml_path_s.c_str(), 0, error.data(), error.size());
-  mjtNum tolerance = std::numeric_limits<float>::epsilon();
-  EXPECT_NEAR(mv->geom_quat[0], ms->geom_quat[0], tolerance);
-  EXPECT_NEAR(mv->geom_quat[1], ms->geom_quat[1], tolerance);
-  EXPECT_NEAR(mv->geom_quat[2], ms->geom_quat[2], tolerance);
-  EXPECT_NEAR(mv->geom_quat[3], ms->geom_quat[3], tolerance);
-  mj_deleteModel(mv);
-  mj_deleteModel(ms);
 }
 
 TEST_F(MjCMeshTest, AreaTooSmall) {
@@ -662,11 +699,11 @@ TEST_F(MjCMeshTest, AreaTooSmall) {
     <asset>
       <mesh name="example_mesh"
         vertex="0 0 0  1e-8 0 0  0 1e-8 0  0 0 1e-8"
-        face="2 0 3  0 1 3  1 2 3  0 2 1" />
+        face="2 0 3  0 1 3  1 2 3  0 2 1" inertia="shell"/>
     </asset>
     <worldbody>
       <body>
-        <geom type="mesh" mesh="example_mesh" shellinertia="true"/>
+        <geom type="mesh" mesh="example_mesh"/>
       </body>
     </worldbody>
   </mujoco>
@@ -675,25 +712,6 @@ TEST_F(MjCMeshTest, AreaTooSmall) {
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
   EXPECT_THAT(model, testing::IsNull());
   EXPECT_THAT(error.data(), HasSubstr("mesh surface area is too small"));
-}
-
-TEST_F(MjCMeshTest, AreaTooSmallAllowedWorld) {
-  static constexpr char xml[] = R"(
-  <mujoco>
-    <asset>
-      <mesh name="example_mesh"
-        vertex="0 0 0  1e-8 0 0  0 1e-8 0  0 0 1e-8"
-        face="2 0 3  0 1 3  1 2 3  0 2 1" />
-    </asset>
-    <worldbody>
-      <geom type="mesh" mesh="example_mesh"/>
-    </worldbody>
-  </mujoco>
-  )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull());
-  mj_deleteModel(model);
 }
 
 TEST_F(MjCMeshTest, VolumeTooSmall) {
@@ -715,37 +733,92 @@ TEST_F(MjCMeshTest, VolumeTooSmall) {
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
   EXPECT_THAT(model, testing::IsNull());
   EXPECT_THAT(error.data(), HasSubstr("mesh volume is too small"));
+  mj_deleteModel(model);
 }
 
-TEST_F(MjCMeshTest, VolumeSmallAllowedShell) {
+TEST_F(MjCMeshTest, VisualVolumeTooSmall) {
   static constexpr char xml[] = R"(
   <mujoco>
-    <compiler convexhull="false"/>
+    <default>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" mass="0"/>
+      </default>
+    </default>
     <asset>
       <mesh name="example_mesh"
-        vertex="0 0 0  1 0 0  0 1 0  1 1 0"
-        face="0 1 2  2 1 3" />
+        vertex="0 -4e-16 0  1 0 4e-16  0 1 0  0 0 1"
+        face="0 2 1" />
     </asset>
     <worldbody>
       <body>
-        <geom type="mesh" mesh="example_mesh" shellinertia="true"/>
+        <geom type="mesh" mesh="example_mesh" class="visual"/>
       </body>
     </worldbody>
   </mujoco>
   )";
   std::array<char, 1024> error;
   mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  ASSERT_THAT(model, NotNull());
+  EXPECT_THAT(model, testing::IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("mesh volume is too small"));
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, VisualVolumeSmallAllowedShell) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <default>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" mass="0"/>
+      </default>
+    </default>
+    <asset>
+      <mesh name="example_mesh"
+        vertex="0 0 0  1 0 0  0 1 0  1 1 1e-6"
+        face="0 1 2  2 1 3" />
+    </asset>
+    <worldbody>
+      <body>
+        <geom type="mesh" mesh="example_mesh" class="visual"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   EXPECT_LE(mju_abs(model->geom_size[0]), 1);
   EXPECT_LE(mju_abs(model->geom_size[1]), 1);
   EXPECT_LE(mju_abs(model->geom_size[2]), 1);
   mj_deleteModel(model);
 }
 
-TEST_F(MjCMeshTest, VolumeNegativeDefaultsLegacy) {
+TEST_F(MjCMeshTest, VolumeSmallAllowedShell) {
   static constexpr char xml[] = R"(
   <mujoco>
-    <compiler exactmeshinertia="true"/>
+    <asset>
+      <mesh name="example_mesh"
+        vertex="0 0 0  1 0 0  0 1 0  1 1 1e-6"
+        face="0 1 2  2 1 3" inertia="shell"/>
+    </asset>
+    <worldbody>
+      <body>
+        <geom type="mesh" mesh="example_mesh"/>
+      </body>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  EXPECT_LE(mju_abs(model->geom_size[0]), 1);
+  EXPECT_LE(mju_abs(model->geom_size[1]), 1);
+  EXPECT_LE(mju_abs(model->geom_size[2]), 1);
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, VolumeNegativeThrowsError) {
+  static constexpr char xml[] = R"(
+  <mujoco>
     <asset>
       MESH_DEFINITIONS
     </asset>
@@ -758,7 +831,7 @@ TEST_F(MjCMeshTest, VolumeNegativeDefaultsLegacy) {
   )";
 
   static constexpr char bad_mesh[] = R"(
-      <mesh name="bad_mesh%d"
+      <mesh name="bad_mesh%d" inertia="exact"
         vertex="0 0 0  1 0 0  0 1 0  0 0 1"
         face="3 0 2  0 3 1  1 3 2  0 1 2"/>\n"
   )";
@@ -782,45 +855,35 @@ TEST_F(MjCMeshTest, VolumeNegativeDefaultsLegacy) {
     std::array<char, 1024> error;
     mjModel* model = LoadModelFromString(xml_str.c_str(),
                                          error.data(), error.size());
-    EXPECT_THAT(model, NotNull()) << error.data();
-    EXPECT_LE(mju_abs(model->geom_size[0]), 1);
-    EXPECT_LE(mju_abs(model->geom_size[1]), 1);
-    EXPECT_LE(mju_abs(model->geom_size[2]), 1);
-
-    EXPECT_THAT(error.data(), StartsWith("Malformed mesh 'bad_mesh1'"));
-
-    // first 7 warnings fit in the length-500 warning buffer
-    for (int i = 2; i < mjMIN(nmesh+1, 8); ++i) {
-      std::string msg = "Malformed mesh 'bad_mesh" + std::to_string(i);
-      EXPECT_THAT(error.data(), HasSubstr(msg));
-    }
-
-    mj_deleteModel(model);
+    EXPECT_THAT(model, IsNull());
+    EXPECT_THAT(error.data(), HasSubstr("mesh volume is negative"));
   }
 }
 
-TEST_F(MjCMeshTest, VolumeTooSmallAllowedWorld) {
+TEST_F(MjCMeshTest, MeshIgnoresDefaultDensity) {
   static constexpr char xml[] = R"(
   <mujoco>
+    <default>
+      <geom density="0" />
+    </default>
     <asset>
-      <mesh name="example_mesh"
-        vertex="0 0 0  1 0 0  0 1 0  0 0 1"
-        face="0 2 1" />
+      <mesh name="a" vertex="0 0 0 1 0 0 0 1 0 0 0 1" scale="10 10 10" />
     </asset>
-    <worldbody>
-      <geom type="mesh" mesh="example_mesh"/>
-    </worldbody>
-  </mujoco>
-  )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull());
-  mj_deleteModel(model);
+    <worldbody/>
+  </mujoco>)";
+  char error[1024];
+  mjSpec* spec = mj_parseXMLString(xml, 0, error, sizeof(error));
+  EXPECT_THAT(spec, NotNull()) << error;
+  mjModel* m1 = mj_compile(spec, nullptr);
+  EXPECT_THAT(m1, NotNull());
+  mj_deleteModel(m1);
+  mjModel* m2 = mj_compile(spec, nullptr);
+  EXPECT_THAT(m2, NotNull());
+  mj_deleteModel(m2);
+  mj_deleteSpec(spec);
 }
 
 // ------------- test concave and shell inertia --------------------------------
-
-const mjtNum max_abs_err = std::numeric_limits<float>::epsilon();
 
 TEST_F(MjCMeshTest, ExactConcaveInertia) {
   const std::string xml_path = GetTestDataFilePath(kConcaveInertiaPath);
@@ -828,8 +891,9 @@ TEST_F(MjCMeshTest, ExactConcaveInertia) {
   mjModel* model = mj_loadXML(xml_path.c_str(), 0, error.data(), error.size());
   // analytic computation of 1x1x1 cube with a .8x.8x.9 hole
   // see https://en.wikipedia.org/wiki/List_of_moments_of_inertia
-  mjtNum m_hole = .9 * .8 * .8;
-  mjtNum m_cube = 1.;
+  mjtNum density = 2.;
+  mjtNum m_hole = .9 * .8 * .8 * density;
+  mjtNum m_cube = 1. * density;
   mjtNum m_concave_cube = m_cube - m_hole;
   mjtNum I_cube = m_cube/6.;
   // due to the asymmetric hole, the com position has changed
@@ -839,14 +903,14 @@ TEST_F(MjCMeshTest, ExactConcaveInertia) {
   mjtNum I1 = I_cube - m_hole*(.8*.8 + .8*.8)/12;
   mjtNum I2 = I_cube - m_hole*(.8*.8 + .9*.9)/12
             + m_cube*d_cube*d_cube - m_hole*d_hole*d_hole;
-  EXPECT_LE(mju_abs(model->body_mass[1] - m_concave_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_mass[2] - m_concave_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_mass[3] - m_concave_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_mass[4] - m_concave_cube), max_abs_err);
+  EXPECT_NEAR(model->body_mass[1], m_concave_cube, kMaxAbsErr);
+  EXPECT_NEAR(model->body_mass[2], m_concave_cube, kMaxAbsErr);
+  EXPECT_NEAR(model->body_mass[3], m_concave_cube, kMaxAbsErr);
+  EXPECT_NEAR(model->body_mass[4], m_concave_cube, kMaxAbsErr);
   for (int i = 3; i < 15; i += 3) {
-    EXPECT_LE(mju_abs(model->body_inertia[i] - I1), max_abs_err);
-    EXPECT_LE(mju_abs(model->body_inertia[i+1] - I2), max_abs_err);
-    EXPECT_LE(mju_abs(model->body_inertia[i+2] - I2), max_abs_err);
+    EXPECT_NEAR(model->body_inertia[i], I1, kMaxAbsErr);
+    EXPECT_NEAR(model->body_inertia[i+1], I2, kMaxAbsErr);
+    EXPECT_NEAR(model->body_inertia[i+2], I2, kMaxAbsErr);
   }
   mj_deleteModel(model);
 }
@@ -858,10 +922,10 @@ TEST_F(MjCMeshTest, ExactConvexInertia) {
   // https://en.wikipedia.org/wiki/List_of_moments_of_inertia
   mjtNum m_solid_cube = 1.;
   mjtNum I_solid_cube = 1./6. * m_solid_cube;
-  EXPECT_LE(mju_abs(model->body_mass[1] - m_solid_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_mass[2] - m_solid_cube), max_abs_err);
+  EXPECT_LE(mju_abs(model->body_mass[1] - m_solid_cube), kMaxAbsErr);
+  EXPECT_LE(mju_abs(model->body_mass[2] - m_solid_cube), kMaxAbsErr);
   for (int i = 3; i < 9; i++) {
-    EXPECT_LE(mju_abs(model->body_inertia[i] - I_solid_cube), max_abs_err);
+    EXPECT_LE(mju_abs(model->body_inertia[i] - I_solid_cube), kMaxAbsErr);
   }
   mj_deleteModel(model);
 }
@@ -873,10 +937,10 @@ TEST_F(MjCMeshTest, ExactShellInertia) {
   // see https://en.wikipedia.org/wiki/List_of_moments_of_inertia
   mjtNum m_hollow_cube = 6.;
   mjtNum I_hollow_cube = 5./18. * m_hollow_cube;
-  EXPECT_LE(mju_abs(model->body_mass[1] - m_hollow_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_inertia[3] - I_hollow_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_inertia[4] - I_hollow_cube), max_abs_err);
-  EXPECT_LE(mju_abs(model->body_inertia[5] - I_hollow_cube), max_abs_err);
+  EXPECT_LE(mju_abs(model->body_mass[1] - m_hollow_cube), kMaxAbsErr);
+  EXPECT_LE(mju_abs(model->body_inertia[3] - I_hollow_cube), kMaxAbsErr);
+  EXPECT_LE(mju_abs(model->body_inertia[4] - I_hollow_cube), kMaxAbsErr);
+  EXPECT_LE(mju_abs(model->body_inertia[5] - I_hollow_cube), kMaxAbsErr);
   mj_deleteModel(model);
 }
 
@@ -892,20 +956,21 @@ TEST_F(MjCMeshTest, MeshPosQuat) {
     </worldbody>
   </mujoco>
   )";
-  mjModel* model = LoadModelFromString(xml);
-  ASSERT_THAT(model, NotNull());
-  // Loading the mesh results in an offset of the geom's pos and quat due to the
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  // loading the mesh results in an offset of the geom's pos and quat due to the
   // fact that the geom's center is not the volumetric center of the mesh. To
   // recover the geom's originally specified pose, the offset used is stored in
   // mesh_pos and mesh_quat. In order to recover the originally specified pose
-  // and orientation, first invert the specified mesh_pos and mesh_quat.
+  // and orientation, first invert the specified mesh_pos and mesh_quat
   mjtNum inverse_mesh_pos[3];
   mjtNum inverse_mesh_quat[4];
   mju_negPose(inverse_mesh_pos, inverse_mesh_quat,
               &model->mesh_pos[0], &model->mesh_quat[0]);
 
-  // Apply the inverted mesh_pos and inverted mesh_quat to the geom's pos and
-  // quat. It should match the originally specified values.
+  // apply the inverted mesh_pos and inverted mesh_quat to the geom's pos and
+  // quat. It should match the originally specified values
   mjtNum recovered_pos[3];
   mjtNum recovered_quat[4];
   mju_mulPose(recovered_pos, recovered_quat,
@@ -920,7 +985,66 @@ TEST_F(MjCMeshTest, MeshPosQuat) {
   EXPECT_NEAR(recovered_quat[2], 0, 1e-12);
   EXPECT_NEAR(recovered_quat[3], 0, 1e-12);
 
-  // Same test on the other geom.
+  // same test on the other geom
+  mju_negPose(inverse_mesh_pos, inverse_mesh_quat,
+              &model->mesh_pos[0], &model->mesh_quat[0]);
+  mju_mulPose(recovered_pos, recovered_quat,
+              &model->geom_pos[3], &model->geom_quat[4],
+              inverse_mesh_pos, inverse_mesh_quat);
+  EXPECT_NEAR(recovered_pos[0], 1, 1e-12);
+  EXPECT_NEAR(recovered_pos[1], 2, 1e-12);
+  EXPECT_NEAR(recovered_pos[2], 3, 1e-12);
+
+  EXPECT_NEAR(recovered_quat[0], 0.5, 1e-12);
+  EXPECT_NEAR(recovered_quat[1], 0.5, 1e-12);
+  EXPECT_NEAR(recovered_quat[2], 0.5, 1e-12);
+  EXPECT_NEAR(recovered_quat[3], 0.5, 1e-12);
+
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, MeshPosQuatShellInertia) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="pyramid" vertex="0 0 0  1 0 0  0 1 0  0 0 1" inertia="shell"/>
+    </asset>
+    <worldbody>
+      <geom type="mesh" name="geom1" mesh="pyramid"/>
+      <geom type="mesh" name="geom2" pos="1 2 3" quat="0.5 0.5 0.5 0.5" mesh="pyramid"/>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+  // loading the mesh results in an offset of the geom's pos and quat due to the
+  // fact that the geom's center is not the volumetric center of the mesh. To
+  // recover the geom's originally specified pose, the offset used is stored in
+  // mesh_pos and mesh_quat. In order to recover the originally specified pose
+  // and orientation, first invert the specified mesh_pos and mesh_quat
+  mjtNum inverse_mesh_pos[3];
+  mjtNum inverse_mesh_quat[4];
+  mju_negPose(inverse_mesh_pos, inverse_mesh_quat,
+              &model->mesh_pos[0], &model->mesh_quat[0]);
+
+  // apply the inverted mesh_pos and inverted mesh_quat to the geom's pos and
+  // quat. It should match the originally specified values
+  mjtNum recovered_pos[3];
+  mjtNum recovered_quat[4];
+  mju_mulPose(recovered_pos, recovered_quat,
+              &model->geom_pos[0], &model->geom_quat[0],
+              inverse_mesh_pos, inverse_mesh_quat);
+  EXPECT_NEAR(recovered_pos[0], 0, 1e-12);
+  EXPECT_NEAR(recovered_pos[1], 0, 1e-12);
+  EXPECT_NEAR(recovered_pos[2], 0, 1e-12);
+
+  EXPECT_NEAR(recovered_quat[0], 1, 1e-12);
+  EXPECT_NEAR(recovered_quat[1], 0, 1e-12);
+  EXPECT_NEAR(recovered_quat[2], 0, 1e-12);
+  EXPECT_NEAR(recovered_quat[3], 0, 1e-12);
+
+  // same test on the other geom
   mju_negPose(inverse_mesh_pos, inverse_mesh_quat,
               &model->mesh_pos[0], &model->mesh_quat[0]);
   mju_mulPose(recovered_pos, recovered_quat,
@@ -950,8 +1074,31 @@ TEST_F(MjCMeshTest, MeshScale) {
     </worldbody>
   </mujoco>
   )";
-  mjModel* model = LoadModelFromString(xml);
-  ASSERT_THAT(model, NotNull());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
+
+  EXPECT_THAT(AsVector(model->mesh_scale + 0, 3), ElementsAre(1, 1, 1));
+  EXPECT_THAT(AsVector(model->mesh_scale + 3, 3), ElementsAre(0.9, 1, -1));
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, ShellInertiaTest) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="pyramid" vertex="0 0 0  1 0 0  0 1 0  0 0 1" inertia="shell"/>
+      <mesh name="pyramid_scaled" vertex="0 0 0  1 0 0  0 1 0  0 0 1" scale="0.9 1 -1"/>
+    </asset>
+    <worldbody>
+      <geom type="mesh" name="geom1" mesh="pyramid"/>
+      <geom type="mesh" name="geom2" mesh="pyramid_scaled"/>
+    </worldbody>
+  </mujoco>
+  )";
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
 
   EXPECT_THAT(AsVector(model->mesh_scale + 0, 3), ElementsAre(1, 1, 1));
   EXPECT_THAT(AsVector(model->mesh_scale + 3, 3), ElementsAre(0.9, 1, -1));
@@ -969,9 +1116,9 @@ TEST_F(MjCMeshTest, CreateFaceTexCoord) {
       </asset>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
-  EXPECT_THAT(model, NotNull()) << error.data();
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model, NotNull()) << error;
   mj_deleteModel(model);
 }
 
@@ -1054,17 +1201,454 @@ TEST_F(MjCMeshTest, InvalidIndexInFace) {
     </worldbody>
   </mujoco>
   )";
-  std::array<char, 1024> error;
-  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  char error[1024];
+  mjModel* model = LoadModelFromString(xml, error, sizeof(error));
   ASSERT_THAT(model, IsNull());
-  EXPECT_THAT(
-      error.data(),
-      HasSubstr(
-          "in face 0, vertex index 6 does not exist"));
+  EXPECT_THAT(error, HasSubstr("in face 0, vertex index 6 does not exist"));
   mj_deleteModel(model);
 }
 
+TEST_F(MjCMeshTest, QhullCache) {
+  static constexpr char xml1[] = R"(
+    <mujoco>
+      <asset>
+        <mesh name="box" file="cube_complete.obj"/>
+      </asset>
+      <worldbody>
+        <geom type="mesh" pos="0 0 2" mesh="box" contype="0" conaffinity="0"/>
+        <geom type="mesh" pos="0 0 0" mesh="box" contype="0" conaffinity="0"/>
+      </worldbody>
+    </mujoco>)";
 
+    static constexpr char xml2[] = R"(
+      <mujoco>
+        <asset>
+          <mesh name="box" file="cube_complete.obj"/>
+        </asset>
+        <worldbody>
+          <geom type="mesh" pos="0 0 2" mesh="box"/>
+          <geom type="mesh" pos="0 0 0" mesh="box"/>
+        </worldbody>
+      </mujoco>)";
+
+  mjVFS vfs;
+  mj_defaultVFS(&vfs);
+  mj_addFileVFS(&vfs, "", GetTestDataFilePath(kCubeCompletePath).c_str());
+
+  std::array<char, 1000> error;
+  mjModel* model = LoadModelFromString(xml1, error.data(), error.size(), &vfs);
+  ASSERT_THAT(model, NotNull()) << "Failed to load model: " << error.data();
+  EXPECT_THAT(model->mesh_graphadr[0], -1);
+
+  mj_deleteModel(model);
+
+  model = LoadModelFromString(xml2, error.data(), error.size(), &vfs);
+  ASSERT_THAT(model, NotNull()) << "Failed to load model: " << error.data();
+  EXPECT_GT(model->mesh_graphadr[0], -1);
+
+  mj_deleteModel(model);
+  mj_deleteVFS(&vfs);
+}
+
+TEST_F(MjCMeshTest, LoadSkin) {
+  const std::string xml_path = GetTestDataFilePath(kCubeSkinPath);
+  std::array<char, 1024> error;
+  mjSpec* spec = mj_parseXML(xml_path.c_str(), 0, error.data(), error.size());
+  EXPECT_THAT(spec, NotNull()) << error.data();
+  mjModel* m1 = mj_compile(spec, 0);
+  EXPECT_THAT(m1, NotNull());
+  mj_deleteModel(m1);
+  mjModel* m2 = mj_compile(spec, 0);
+  EXPECT_THAT(m2, NotNull());
+  mj_deleteModel(m2);
+  mj_deleteSpec(spec);
+}
+
+// ------------- test octree ---------------------------------------------------
+
+TEST_F(MjCMeshTest, Octree) {
+  const std::string xml_path = GetTestDataFilePath(kTorusPath);
+  std::array<char, 1024> error;
+  mjSpec* spec = mj_parseXML(xml_path.c_str(), 0, error.data(), error.size());
+  mjsGeom* geom = mjs_asGeom(mjs_firstElement(spec, mjOBJ_GEOM));
+  geom->type = mjGEOM_SDF;
+  mjModel* model = mj_compile(spec, 0);
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_GT(model->mesh_octnum[0], 0);
+  mj_deleteSpec(spec);
+  mj_deleteModel(model);
+}
+
+namespace {
+bool AreAabbsAdjacent(const mjtNum* aabb1, const mjtNum* aabb2) {
+  const double kEps = 1e-6;
+  int touching_dims = 0;
+  int overlapping_dims = 0;
+
+  for (int dim = 0; dim < 3; ++dim) {
+    const mjtNum center1 = aabb1[dim];
+    const mjtNum half_size1 = aabb1[dim + 3];
+    const mjtNum center2 = aabb2[dim];
+    const mjtNum half_size2 = aabb2[dim + 3];
+    const mjtNum gap =
+        std::abs(center1 - center2) - (half_size1 + half_size2);
+    if (std::abs(gap) < kEps) {
+      touching_dims++;
+    } else if (gap < -kEps) {
+      overlapping_dims++;
+    }
+  }
+
+  return touching_dims == 1 && overlapping_dims == 2;
+}
+}  // namespace
+
+TEST_F(MjCMeshTest, OctreeIsBalanced) {
+  const std::string xml_path = GetTestDataFilePath(kTorusPath);
+  std::array<char, 1024> error;
+  mjSpec* spec = mj_parseXML(xml_path.c_str(), 0, error.data(), error.size());
+  mjsGeom* geom = mjs_asGeom(mjs_firstElement(spec, mjOBJ_GEOM));
+  geom->type = mjGEOM_SDF;
+  mjModel* model = mj_compile(spec, 0);
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_GT(model->mesh_octnum[0], 0);
+
+  const int octree_adr = model->mesh_octadr[0];
+  const int noct = model->mesh_octnum[0];
+
+  std::vector<int> leaves;
+  for (int i = 0; i < noct; ++i) {
+    bool is_leaf = true;
+    for (int j = 0; j < 8; ++j) {
+      if (model->oct_child[(octree_adr + i) * 8 + j] != -1) {
+        is_leaf = false;
+        break;
+      }
+    }
+    if (is_leaf) {
+      leaves.push_back(i);
+    }
+  }
+
+  int unbalanced_pairs = 0;
+  for (int i = 0; i < leaves.size(); ++i) {
+    for (int j = i + 1; j < leaves.size(); ++j) {
+      const int node1_idx = leaves[i];
+      const int node2_idx = leaves[j];
+      const mjtNum* aabb1 = &model->oct_aabb[(octree_adr + node1_idx) * 6];
+      const mjtNum* aabb2 = &model->oct_aabb[(octree_adr + node2_idx) * 6];
+
+      if (AreAabbsAdjacent(aabb1, aabb2)) {
+        const int level1 = model->oct_depth[octree_adr + node1_idx];
+        const int level2 = model->oct_depth[octree_adr + node2_idx];
+        if (std::abs(level1 - level2) > 1) {
+          if (unbalanced_pairs < 10) {
+            ADD_FAILURE()
+                << "Nodes " << node1_idx << " (level " << level1 << ") and "
+                << node2_idx << " (level " << level2 << ") are not balanced."
+                << "\nAABB1: center=(" << aabb1[0] << ", " << aabb1[1] << ", "
+                << aabb1[2] << "), half_size=(" << aabb1[3] << ", "
+                << aabb1[4] << ", " << aabb1[5] << ")"
+                << "\nAABB2: center=(" << aabb2[0] << ", " << aabb2[1] << ", "
+                << aabb2[2] << "), half_size=(" << aabb2[3] << ", "
+                << aabb2[4] << ", " << aabb2[5] << ")";
+          }
+          unbalanced_pairs++;
+        }
+      }
+    }
+  }
+
+  EXPECT_EQ(unbalanced_pairs, 0)
+      << "Found " << unbalanced_pairs << " unbalanced adjacent leaf pairs.";
+
+  mj_deleteSpec(spec);
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, OctreeHangingNodeInterpolation) {
+  const std::string xml_path = GetTestDataFilePath(kTorusPath);
+  std::array<char, 1024> error;
+  mjSpec* spec = mj_parseXML(xml_path.c_str(), 0, error.data(), error.size());
+  mjsGeom* geom = mjs_asGeom(mjs_firstElement(spec, mjOBJ_GEOM));
+  geom->type = mjGEOM_SDF;
+  mjModel* model = mj_compile(spec, 0);
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_GT(model->mesh_octnum[0], 0);
+  double kEps = 1e-6;
+
+  const int octree_adr = model->mesh_octadr[0];
+  const int noct = model->mesh_octnum[0];
+  const mjtNum* sdf = model->oct_coeff + octree_adr * 8;
+
+  // find all leaves in the octree
+  std::vector<int> leaves;
+  for (int i = 0; i < noct; ++i) {
+    bool is_leaf = true;
+    for (int j = 0; j < 8; ++j) {
+      if (model->oct_child[(octree_adr + i) * 8 + j] != -1) {
+        is_leaf = false;
+        break;
+      }
+    }
+    if (is_leaf) {
+      leaves.push_back(i);
+    }
+  }
+
+  // do a n^2 check of all pairs of leaves in the octree
+  // for each pair, check if they are adjacent and if so, check that all hanging
+  // nodes within the octree can be interpolated from their parent nodes
+  int hanging_nodes_checked = 0;
+  int interpolation_failures = 0;
+  for (int i = 0; i < leaves.size(); ++i) {
+    for (int j = i + 1; j < leaves.size(); ++j) {
+      const int node1_idx = leaves[i];
+      const int node2_idx = leaves[j];
+      const mjtNum* aabb1 = &model->oct_aabb[(octree_adr + node1_idx) * 6];
+      const mjtNum* aabb2 = &model->oct_aabb[(octree_adr + node2_idx) * 6];
+
+      if (AreAabbsAdjacent(aabb1, aabb2)) {
+        const int level1 = model->oct_depth[octree_adr + node1_idx];
+        const int level2 = model->oct_depth[octree_adr + node2_idx];
+
+        if (level1 == level2) {
+          continue;
+        }
+
+        // decide which node is finer and which is coarser
+        const int finer_node_idx = (level1 > level2) ? node1_idx : node2_idx;
+        const int coarser_node_idx =
+            (level1 > level2) ? node2_idx : node1_idx;
+        const mjtNum* coarser_aabb =
+            &model->oct_aabb[(octree_adr + coarser_node_idx) * 6];
+        const mjtNum* finer_aabb =
+            &model->oct_aabb[(octree_adr + finer_node_idx) * 6];
+
+        mjtNum coarser_corners[8][3];
+        for (int c = 0; c < 8; ++c) {
+          int sx = (c & 1) ? 1 : -1;
+          int sy = (c & 2) ? 1 : -1;
+          int sz = (c & 4) ? 1 : -1;
+          coarser_corners[c][0] = coarser_aabb[0] + sx * coarser_aabb[3];
+          coarser_corners[c][1] = coarser_aabb[1] + sy * coarser_aabb[4];
+          coarser_corners[c][2] = coarser_aabb[2] + sz * coarser_aabb[5];
+        }
+
+        // for all vertices in the finer node, check if they are hanging and
+        // can be interpolated
+        for (int v_idx = 0; v_idx < 8; ++v_idx) {
+          mjtNum v_pos[3];
+          int sx = (v_idx & 1) ? 1 : -1;
+          int sy = (v_idx & 2) ? 1 : -1;
+          int sz = (v_idx & 4) ? 1 : -1;
+          v_pos[0] = finer_aabb[0] + sx * finer_aabb[3];
+          v_pos[1] = finer_aabb[1] + sy * finer_aabb[4];
+          v_pos[2] = finer_aabb[2] + sz * finer_aabb[5];
+
+          // skip finer vertices that are also coarse corners
+          bool is_coarse_corner = false;
+          for (int c = 0; c < 8; ++c) {
+            if (mju_dist3(v_pos, coarser_corners[c]) < 1e-6) {
+              is_coarse_corner = true;
+              break;
+            }
+          }
+          if (is_coarse_corner) {
+            continue;
+          }
+
+          // skip vertices that are not on the boundary
+          mjtNum p_local[3];
+          bool outside = false;
+          for (int d = 0; d < 3; ++d) {
+            p_local[d] = (v_pos[d] - coarser_aabb[d]) / coarser_aabb[d + 3];
+            if (std::abs(p_local[d]) > 1.0 + kEps) {
+              outside = true;
+              break;
+            }
+          }
+          if (outside) {
+            continue;
+          }
+
+          // count the number of dimensions that are on the boundary
+          int num_dim = 0;
+          for (int d = 0; d < 3; ++d) {
+            if (std::abs(p_local[d] - 1.0) < kEps) {
+              num_dim++;
+            } else if (std::abs(p_local[d] + 1.0) < kEps) {
+              num_dim++;
+            }
+          }
+
+          double interpolated_sdf = 0;
+          const mjtNum* coarser_sdf = sdf + coarser_node_idx * 8;
+
+          // for edge or face nodes, try to interpolate the hanging nodes
+          if (num_dim == 1 || num_dim == 2) {
+            for (int k = 0; k < 8; ++k) {
+              int sx = (k & 1) ? 1 : -1;
+              int sy = (k & 2) ? 1 : -1;
+              int sz = (k & 4) ? 1 : -1;
+              double weight = (1 + p_local[0] * sx) / 2.0 *
+                              (1 + p_local[1] * sy) / 2.0 *
+                              (1 + p_local[2] * sz) / 2.0;
+              if (weight > kEps && num_dim == 1) {
+                ASSERT_NEAR(weight, 0.25, kEps);
+              } else if (weight > kEps && num_dim == 2) {
+                ASSERT_NEAR(weight, 0.5, kEps);
+              }
+              interpolated_sdf += weight * coarser_sdf[k];
+            }
+          } else {
+            continue;
+          }
+
+          // if the values do not match, log an error
+          const mjtNum* finer_sdf = sdf + finer_node_idx * 8;
+          if (std::abs(finer_sdf[v_idx] - interpolated_sdf) > kEps) {
+            if (interpolation_failures < 10) {
+              EXPECT_NEAR(finer_sdf[v_idx], interpolated_sdf, kEps);
+            }
+            interpolation_failures++;
+          }
+          hanging_nodes_checked++;
+        }
+      }
+    }
+  }
+  EXPECT_GT(hanging_nodes_checked, 0);
+  EXPECT_EQ(interpolation_failures, 0)
+      << "Found " << interpolation_failures
+      << " hanging node interpolation failures.";
+
+  mj_deleteSpec(spec);
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, OctreeNotComputedForNonSDF) {
+  const std::string xml_path = GetTestDataFilePath(kTorusPath);
+  std::array<char, 1024> error;
+  mjModel* model = mj_loadXML(xml_path.c_str(), 0, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_EQ(model->noct, 0);
+  mj_deleteModel(model);
+}
+
+double CubeSDF(double p[3], double b[3]) {
+  double q[3] = {std::abs(p[0]) - b[0],
+                 std::abs(p[1]) - b[1],
+                 std::abs(p[2]) - b[2]};
+  return std::sqrt(std::pow(std::max(q[0], 0.0), 2) +
+                   std::pow(std::max(q[1], 0.0), 2) +
+                   std::pow(std::max(q[2], 0.0), 2)) +
+         std::min(std::max(q[0], std::max(q[1], q[2])), 0.0);
+}
+
+TEST_F(MjCMeshTest, OctreeCube) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <asset>
+      <mesh name="mesh" vertex="-1 -1 -1  1 -1 -1  -1 1 -1  1 1 -1
+                                -1 -1  1  1 -1  1  -1 1  1  1 1  1"/>
+    </asset>
+    <worldbody>
+      <geom mesh="mesh" type="sdf"/>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* m = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(m, NotNull()) << error.data();
+  EXPECT_EQ(m->noct, 63497);
+  mjData* d = mj_makeData(m);
+  ASSERT_THAT(d, NotNull());
+  mj_forward(m, d);
+  mjSDF sdf;
+  int instance = 0;
+  mjtGeom geomtype = mjGEOM_SDF;
+  const mjpPlugin* sdf_ptr = NULL;
+  sdf.id = &instance;
+  sdf.type = mjSDFTYPE_SINGLE;
+  sdf.plugin = &sdf_ptr;
+  sdf.geomtype = &geomtype;
+  mjtNum pnt[3][3] = {{1, 1, 1}, {.5, .5, .5}, {.5, 0, 0}};
+  mjtNum size[3] = {1, 1, 1};
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_NEAR(mjc_distance(m, d, &sdf, pnt[i]), CubeSDF(pnt[i], size), 1e-1)
+        << "i = " << i;
+  }
+  mj_deleteModel(m);
+  mj_deleteData(d);
+}
+
+TEST_F(MjCMeshTest, HemisphereSizes) {
+  static constexpr char xml[] = R"(
+  <mujoco model="makemesh">
+    <asset>
+      <mesh name="h0" builtin="hemisphere" params="0"/>
+      <mesh name="h1" builtin="hemisphere" params="1"/>
+      <mesh name="h2" builtin="hemisphere" params="2"/>
+    </asset>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_EQ(model->mesh_vertnum[0], 2 * (0 + 1) * (0 + 2) + 2);
+  EXPECT_EQ(model->mesh_vertnum[1], 2 * (1 + 1) * (1 + 2) + 2);
+  EXPECT_EQ(model->mesh_vertnum[2], 2 * (2 + 1) * (2 + 2) + 2);
+  EXPECT_EQ(model->mesh_facenum[0], 4 * (0 + 1) * (0 + 2));
+  EXPECT_EQ(model->mesh_facenum[1], 4 * (1 + 1) * (1 + 2));
+  EXPECT_EQ(model->mesh_facenum[2], 4 * (2 + 1) * (2 + 2));
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, SphereSizes) {
+  static constexpr char xml[] = R"(
+  <mujoco model="makemesh">
+    <asset>
+      <mesh name="h0" builtin="sphere" params="0"/>
+      <mesh name="h1" builtin="sphere" params="1"/>
+      <mesh name="h2" builtin="sphere" params="2"/>
+    </asset>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_EQ(model->mesh_vertnum[0], 2 + 10 * std::pow(4, 0));
+  EXPECT_EQ(model->mesh_vertnum[1], 2 + 10 * std::pow(4, 1));
+  EXPECT_EQ(model->mesh_vertnum[2], 2 + 10 * std::pow(4, 2));
+  EXPECT_EQ(model->mesh_facenum[0], 20 * std::pow(4, 0));
+  EXPECT_EQ(model->mesh_facenum[1], 20 * std::pow(4, 1));
+  EXPECT_EQ(model->mesh_facenum[2], 20 * std::pow(4, 2));
+  mj_deleteModel(model);
+}
+
+TEST_F(MjCMeshTest, MeshMaterial) {
+  static constexpr char xml[] = R"(
+  <mujoco model="mesh_material">
+    <asset>
+      <mesh name="h0" builtin="sphere" params="0" material="m1"/>
+      <material name="m0" rgba="1 0 0 1"/>
+      <material name="m1" rgba="1 1 0 1"/>
+    </asset>
+
+    <worldbody>
+      <geom name="g0" type="mesh" mesh="h0"/>
+      <geom name="g1" type="mesh" mesh="h0" material="m0"/>
+    </worldbody>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjModel* model = LoadModelFromString(xml, error.data(), error.size());
+  ASSERT_THAT(model, NotNull()) << error.data();
+  EXPECT_EQ(model->geom_matid[0], 1);
+  EXPECT_EQ(model->geom_matid[1], 0);
+  mj_deleteModel(model);
+}
 
 }  // namespace
 }  // namespace mujoco

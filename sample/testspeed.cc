@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ratio>
 #include <string>
@@ -30,19 +31,18 @@ const int maxthread = 512;
 mjModel* m = NULL;
 mjData* d[maxthread];
 
-
 // per-thread statistics
 int contacts[maxthread];
 int constraints[maxthread];
+mjtNum iterations[maxthread];
 mjtNum simtime[maxthread];
 
-// timer
+// timer (microseconds)
 mjtNum gettm(void) {
-  using std::chrono::steady_clock;
-  using Microseconds = std::chrono::duration<double, std::micro>;
-  static steady_clock::time_point tm_start = steady_clock::now();
-  auto elapsed = Microseconds(steady_clock::now() - tm_start);
-  return elapsed.count();
+  using Clock = std::chrono::steady_clock;
+  using Microseconds = std::chrono::duration<mjtNum, std::micro>;
+  static const Clock::time_point tm_start = Clock::now();
+  return Microseconds(Clock::now() - tm_start).count();
 }
 
 // deallocate and print message
@@ -57,22 +57,43 @@ int finish(const char* msg = NULL, mjModel* m = NULL) {
     std::printf("%s\n", msg);
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }
 
-std::vector<mjtNum> CtrlNoise(const mjModel* m, int nsteps, mjtNum ctrlnoise) {
+std::vector<mjtNum> CtrlNoise(const mjModel* m, int nsteps, mjtNum ctrl_noise_std, mjtNum ctrl_noise_rate, int key) {
   std::vector<mjtNum> ctrl;
+
+  // convert rate and scale to discrete time (Ornstein–Uhlenbeck)
+  mjtNum rate = mju_exp(-m->opt.timestep / ctrl_noise_rate);
+  mjtNum scale = ctrl_noise_std * mju_sqrt(1-rate*rate);
+
   for (int step=0; step < nsteps; step++) {
     for (int i = 0; i < m->nu; i++) {
-      mjtNum center = 0.0;
-      mjtNum radius = 1.0;
+      mjtNum midpoint = 0.0;
+      mjtNum halfrange = 1.0;
       mjtNum* range = m->actuator_ctrlrange + 2 * i;
       if (m->actuator_ctrllimited[i]) {
-        center = (range[1] + range[0]) / 2;
-        radius = (range[1] - range[0]) / 2;
+        midpoint =  0.5 * (range[1] + range[0]);
+        halfrange = 0.5 * (range[1] - range[0]);
       }
-      radius *= ctrlnoise;
-      ctrl.push_back(center + radius * (2 * mju_Halton(step, i+2) - 1));
+
+      // overwrite midpoint with keyframe, if given
+      if (key >= 0) {
+        midpoint = m->key_ctrl[key*m->nu+i];
+      }
+
+      // exponential convergence to midpoint at ctrl_noise_rate
+      mjtNum ctrl_ = step > 0 ? rate * ctrl[(step-1)*m->nu+i] + (1-rate) * midpoint : midpoint;
+
+      // add noise
+      ctrl_ += scale * halfrange * (2 * mju_Halton(step, i+2) - 1);
+
+      // clip to range if limited
+      if (m->actuator_ctrllimited[i]) {
+        ctrl_ = mju_clip(ctrl_, range[0], range[1]);
+      }
+
+      ctrl.push_back(ctrl_);
     }
   }
   return ctrl;
@@ -84,6 +105,7 @@ void simulate(int id, int nstep, mjtNum* ctrl) {
   // clear statistics
   contacts[id] = 0;
   constraints[id] = 0;
+  iterations[id] = 0;
 
   // run and time
   mjtNum start = gettm();
@@ -97,6 +119,16 @@ void simulate(int id, int nstep, mjtNum* ctrl) {
     // accumulate statistics
     contacts[id] += d[id]->ncon;
     constraints[id] += d[id]->nefc;
+    int nisland = mjMAX(1, mjMIN(d[id]->nisland, mjNISLAND));
+    if (nisland == 1 || nisland == 0) {
+      iterations[id] += d[id]->solver_niter[0];
+    } else {
+      mjtNum niter = 0;
+      for (int j=0; j < nisland; j++) {
+        niter += d[id]->solver_niter[j];
+      }
+      iterations[id] += niter / nisland;
+    }
   }
   simtime[id] = 1e-6 * (gettm() - start);
 }
@@ -116,7 +148,8 @@ int main(int argc, char** argv) {
       "  modelfile                 path to model (required)\n"
       "  nstep         10000       number of steps per rollout\n"
       "  nthread       1           number of threads running parallel rollouts\n"
-      "  ctrlnoise     0.01        scale of pseudo-random noise injected into actuators\n"
+      "  ctrlnoisestd  0.01        scale of pseudo-random noise injected into actuators\n"
+      "  ctrlnoiserate 0.1         rate of convergence to ctrl keyframe/midpoint\n"
       "  npoolthread   0           number of threads in engine-internal threadpool\n"
       "\n"
       "Note: If the model has a keyframe named \"test\", it will be loaded prior to simulation\n");
@@ -125,22 +158,29 @@ int main(int argc, char** argv) {
   // read arguments
   int nstep = 10000, nthread = 0, npoolthread = 0;
   // inject small noise by default, to avoid fixed contact state
-  double ctrlnoise = 0.01;
+  double ctrlnoisestd = 0.01;
+  double ctrlnoiserate = 0.1;
   if (argc > 2 && (std::sscanf(argv[2], "%d", &nstep) != 1 || nstep <= 0)) {
     return finish("Invalid nstep argument");
   }
   if (argc > 3 && std::sscanf(argv[3], "%d", &nthread) != 1) {
     return finish("Invalid nthread argument");
   }
-  if (argc > 4 && std::sscanf(argv[4], "%lf", &ctrlnoise) != 1) {
-    return finish("Invalid ctrlnoise argument");
+  if (argc > 4 && std::sscanf(argv[4], "%lf", &ctrlnoisestd) != 1) {
+    return finish("Invalid ctrlnoisestd argument");
   }
-  if (argc > 5 && std::sscanf(argv[5], "%d", &npoolthread) != 1) {
+  if (argc > 5 && std::sscanf(argv[5], "%lf", &ctrlnoiserate) != 1) {
+    return finish("Invalid ctrlnoiserate argument");
+  }
+  if (argc > 6 && std::sscanf(argv[6], "%d", &npoolthread) != 1) {
     return finish("Invalid npoolthread argument");
   }
 
-  // clamp ctrlnoise to [0.0, 1.0]
-  ctrlnoise = mjMAX(0.0, mjMIN(ctrlnoise, 1.0));
+  // clamp ctrlnoisestd to [0.0, 1.0]
+  ctrlnoisestd = mju_clip(ctrlnoisestd, 0.0, 1.0);
+
+  // clamp ctrlnoiserate to [0.0, 1.0]
+  ctrlnoiserate = mju_clip(ctrlnoiserate, 0.0, 1.0);
 
   // clamp nthread to [1, maxthread]
   nthread = mjMAX(1, mjMIN(maxthread, nthread));
@@ -186,20 +226,26 @@ int main(int argc, char** argv) {
   mjcb_time = gettm;
 
   // print start
-  std::printf("\nRolling out %d steps%s, at dt = %g",
+  std::printf("\nRolling out %d steps%s at dt = %g",
               nstep,
               nthread > 1 ? " per thread" : "",
               m->opt.timestep);
+
+  // print precision
   if (sizeof(mjtNum) == 4) {
-    std::printf(", using single-precision");
+    std::printf(", using single precision");
+  } else {
+    std::printf(", using double precision");
   }
+
+  // print threadpool size
   if (npoolthread > 1) {
     std::printf(", using %d threads", npoolthread);
   }
   std::printf("...\n\n");
 
   // create pseudo-random control sequence
-  std::vector<mjtNum> ctrl = CtrlNoise(m, nstep, ctrlnoise);
+  std::vector<mjtNum> ctrl = CtrlNoise(m, nstep, ctrlnoisestd, ctrlnoiserate, testkey);
 
   // run simulation, record total time
   std::thread th[maxthread];
@@ -224,14 +270,23 @@ int main(int argc, char** argv) {
     std::printf("Details for thread 0\n\n");
   }
 
+  // solver names indexed by mjtSolver
+  const char* solver[] = {"PGS", "CG", "Newton"};
+  const char* solto6[] = {"   ", "    ", ""};  // complete to 6 characters
+
   // details for thread 0
   std::printf(" Simulation time      : %.2f s\n", simtime[0]);
   std::printf(" Steps per second     : %.0f\n", nstep/simtime[0]);
   std::printf(" Realtime factor      : %.2f x\n", nstep*m->opt.timestep/simtime[0]);
   std::printf(" Time per step        : %.1f %ss\n\n", 1e6*simtime[0]/nstep, mu_str);
-  std::printf(" Contacts per step    : %.2f\n", static_cast<float>(contacts[0])/nstep);
-  std::printf(" Constraints per step : %.2f\n", static_cast<float>(constraints[0])/nstep);
-  std::printf(" Degrees of freedom   : %d\n\n", m->nv);
+  std::printf(" %s iters / step  %s: %.2f\n",
+              solver[m->opt.solver], solto6[m->opt.solver], iterations[0]/nstep);
+  std::printf(" Contacts / step      : %.2f\n", static_cast<float>(contacts[0])/nstep);
+  std::printf(" Constraints / step   : %.2f\n", static_cast<float>(constraints[0])/nstep);
+  std::printf(" Degrees of freedom   : %d\n", m->nv);
+  std::printf(" Dynamic memory usage : %.1f%% of %s\n\n",
+              100 * d[0]->maxuse_arena / (double)(d[0]->narena),
+              mju_writeNumBytes(d[0]->narena));
 
   // profiler, top-level
   printf(" Internal profiler%s, %ss per step\n", nthread > 1 ? " for thread 0" : "", mu_str);

@@ -15,11 +15,11 @@
 # Build configuration for third party libraries used in MuJoCo.
 
 set(MUJOCO_DEP_VERSION_lodepng
-    b4ed2cd7ecf61d29076169b49199371456d4f90b
+    17d08dd26cac4d63f43af217ebd70318bfb8189c
     CACHE STRING "Version of `lodepng` to be fetched."
 )
 set(MUJOCO_DEP_VERSION_tinyxml2
-    9a89766acc42ddfa9e7133c7d81a5bda108a0ade
+    e6caeae85799003f4ca74ff26ee16a789bc2af48
     CACHE STRING "Version of `tinyxml2` to be fetched."
 )
 set(MUJOCO_DEP_VERSION_tinyobjloader
@@ -35,32 +35,35 @@ set(MUJOCO_DEP_VERSION_ccd
     CACHE STRING "Version of `ccd` to be fetched."
 )
 set(MUJOCO_DEP_VERSION_qhull
-    0c8fc90d2037588024d9964515c1e684f6007ecc
+    62ccc56af071eaa478bef6ed41fd7a55d3bb2d80
     CACHE STRING "Version of `qhull` to be fetched."
 )
+# TODO(matijak): Update this commit only after google's version of Eigen version
+# is updated to include a fix to https://gitlab.com/libeigen/eigen/-/issues/2986
+# which is causing build errors in CI when using MSVC.
 set(MUJOCO_DEP_VERSION_Eigen3
-    33d0937c6bdf5ec999939fb17f2a553183d14a74
+    4be7e6b4e0a82853e853c0c7c4ef72f395e1f497
     CACHE STRING "Version of `Eigen3` to be fetched."
 )
 
 set(MUJOCO_DEP_VERSION_abseil
-    4447c7562e3bc702ade25105912dce503f0c4010 # LTS 20240722.0
+    d38452e1ee03523a208362186fd42248ff2609f6 # LTS 20250814.1
     CACHE STRING "Version of `abseil` to be fetched."
 )
 
 set(MUJOCO_DEP_VERSION_gtest
-    b514bdc898e2951020cbdca1304b75f5950d1f59 # v1.15.2
+    52eb8108c5bdec04579160ae17225d66034bd723 # v1.17.0
     CACHE STRING "Version of `gtest` to be fetched."
 )
 
 set(MUJOCO_DEP_VERSION_benchmark
-    7c8ed6b082aa3c7a3402f18e50da4480421d08fd # v1.8.4
+    5f7d66929fb66869d96dfcbacf0d8a586b33766d
     CACHE STRING "Version of `benchmark` to be fetched."
 )
 
-set(MUJOCO_DEP_VERSION_sdflib
-    1927bee6bb8225258a39c8cbf14e18a4d50409ae
-    CACHE STRING "Version of `SdfLib` to be fetched."
+set(MUJOCO_DEP_VERSION_TriangleMeshDistance
+    2cb643de1436e1ba8e2be49b07ec5491ac604457
+    CACHE STRING "Version of `TriangleMeshDistance` to be fetched."
 )
 
 mark_as_advanced(MUJOCO_DEP_VERSION_lodepng)
@@ -73,7 +76,7 @@ mark_as_advanced(MUJOCO_DEP_VERSION_Eigen3)
 mark_as_advanced(MUJOCO_DEP_VERSION_abseil)
 mark_as_advanced(MUJOCO_DEP_VERSION_gtest)
 mark_as_advanced(MUJOCO_DEP_VERSION_benchmark)
-mark_as_advanced(MUJOCO_DEP_VERSION_sdflib)
+mark_as_advanced(MUJOCO_DEP_VERSION_TriangleMeshDistance)
 
 include(FetchContent)
 include(FindOrFetch)
@@ -168,6 +171,11 @@ findorfetch(
 target_compile_options(tinyxml2 PRIVATE ${MUJOCO_MACOS_COMPILE_OPTIONS})
 target_link_options(tinyxml2 PRIVATE ${MUJOCO_MACOS_LINK_OPTIONS})
 
+# update cmake_minimum_required version for compatibility with newer version of cmake
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+  set(CMAKE_POLICY_VERSION_MINIMUM ${MUJOCO_CMAKE_MIN_REQ})
+  set(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED ON)
+endif()
 findorfetch(
   USE_SYSTEM_PACKAGE
   OFF
@@ -183,30 +191,42 @@ findorfetch(
   tinyobjloader
   EXCLUDE_FROM_ALL
 )
+if(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED)
+  unset(CMAKE_POLICY_VERSION_MINIMUM)
+  unset(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED)
+endif()
 
-option(SDFLIB_USE_ASSIMP OFF)
-option(SDFLIB_USE_OPENMP OFF)
-option(SDFLIB_USE_ENOKI OFF)
-findorfetch(
-  USE_SYSTEM_PACKAGE
-  OFF
-  PACKAGE_NAME
-  sdflib
-  LIBRARY_NAME
-  sdflib
-  GIT_REPO
-  https://github.com/UPC-ViRVIG/SdfLib.git
-  GIT_TAG
-  ${MUJOCO_DEP_VERSION_sdflib}
-  TARGETS
-  SdfLib
-  EXCLUDE_FROM_ALL
-)
-target_compile_options(SdfLib PRIVATE ${MUJOCO_MACOS_COMPILE_OPTIONS})
-target_link_options(SdfLib PRIVATE ${MUJOCO_MACOS_LINK_OPTIONS})
+if(NOT TARGET trianglemeshdistance)
+  FetchContent_Declare(
+    trianglemeshdistance
+    GIT_REPOSITORY https://github.com/InteractiveComputerGraphics/TriangleMeshDistance.git
+    GIT_TAG ${MUJOCO_DEP_VERSION_TriangleMeshDistance}
+  )
+
+  FetchContent_GetProperties(trianglemeshdistance)
+  if(NOT trianglemeshdistance_POPULATED)
+    FetchContent_Populate(trianglemeshdistance)
+    # Patch the source code to silence a warning/error related to a loop variable creating a copy.
+    # Since this is a header only library this fix is less intrusive than disabling the warning for
+    # any target including the header.
+    set(TMD_HEADER ${trianglemeshdistance_SOURCE_DIR}/TriangleMeshDistance/include/tmd/TriangleMeshDistance.h)
+    file(READ ${TMD_HEADER} TMD_CONTENT)
+    string(REPLACE
+      "for (const auto edge_count : edges_count) {"
+      "for (const auto& edge_count : edges_count) {"
+      TMD_CONTENT "${TMD_CONTENT}")
+    file(WRITE ${TMD_HEADER} "${TMD_CONTENT}")
+    include_directories(${trianglemeshdistance_SOURCE_DIR})
+  endif()
+endif()
 
 set(ENABLE_DOUBLE_PRECISION ON)
 set(CCD_HIDE_ALL_SYMBOLS ON)
+# update cmake_minimum_required version for compatibility with newer version of cmake
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+  set(CMAKE_POLICY_VERSION_MINIMUM ${MUJOCO_CMAKE_MIN_REQ})
+  set(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED ON)
+endif()
 findorfetch(
   USE_SYSTEM_PACKAGE
   OFF
@@ -222,6 +242,10 @@ findorfetch(
   ccd
   EXCLUDE_FROM_ALL
 )
+if(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED)
+  unset(CMAKE_POLICY_VERSION_MINIMUM)
+  unset(CMAKE_POLICY_VERSION_MINIMUM_LOCALLY_DEFINED)
+endif()
 target_compile_options(ccd PRIVATE ${MUJOCO_MACOS_COMPILE_OPTIONS})
 target_link_options(ccd PRIVATE ${MUJOCO_MACOS_LINK_OPTIONS})
 

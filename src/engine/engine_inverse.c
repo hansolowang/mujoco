@@ -19,17 +19,19 @@
 #include <mujoco/mjdata.h>
 #include <mujoco/mjmacro.h>
 #include <mujoco/mjmodel.h>
+#include <mujoco/mjsan.h>  // IWYU pragma: keep
 #include "engine/engine_collision_driver.h"
 #include "engine/engine_core_constraint.h"
 #include "engine/engine_core_smooth.h"
 #include "engine/engine_derivative.h"
-#include "engine/engine_io.h"
+#include "engine/engine_memory.h"
 #include "engine/engine_macro.h"
 #include "engine/engine_forward.h"
 #include "engine/engine_sensor.h"
 #include "engine/engine_support.h"
 #include "engine/engine_util_blas.h"
 #include "engine/engine_util_errmem.h"
+#include "engine/engine_util_misc.h"
 #include "engine/engine_util_sparse.h"
 
 // position-dependent computations
@@ -44,7 +46,7 @@ void mj_invPosition(const mjModel* m, mjData* d) {
   mj_tendon(m, d);
   TM_END(mjTIMER_POS_KINEMATICS);
 
-  mj_crb(m, d);        // timed internally (POS_INERTIA)
+  mj_makeM(m, d);      // timed internally (POS_INERTIA)
   mj_factorM(m, d);    // timed internally (POS_INERTIA)
 
   mj_collision(m, d);  // timed internally (POS_COLLISION)
@@ -61,21 +63,19 @@ void mj_invPosition(const mjModel* m, mjData* d) {
 }
 
 
-
 // velocity-dependent computations
 void mj_invVelocity(const mjModel* m, mjData* d) {
   mj_fwdVelocity(m, d);
 }
 
 
-
 // convert discrete-time qacc to continuous-time qacc
 static void mj_discreteAcc(const mjModel* m, mjData* d) {
-  int nv = m->nv, dof_damping;
+  int nv = m->nv, nC = m->nC, nD = m->nD, dof_damping;
   mjtNum *qacc = d->qacc;
 
   mj_markStack(d);
-  mjtNum* qfrc = mj_stackAllocNum(d, nv);
+  mjtNum* qfrc = mjSTACKALLOC(d, nv, mjtNum);
 
   // use selected integrator
   switch ((mjtIntegrator) m->opt.integrator) {
@@ -113,15 +113,15 @@ static void mj_discreteAcc(const mjModel* m, mjData* d) {
     // compute qDeriv
     mjd_smooth_vel(m, d, /* flg_bias = */ 1);
 
-    // set qLU = qM
-    mj_copyM2DSparse(m, d, d->qLU, d->qM);
+    // gather qLU <- qM (lower to full)
+    mju_gatherMasked(d->qLU, d->M, m->mapM2D, nD);
 
     // set qLU = qM - dt*qDeriv
     mju_addToScl(d->qLU, d->qDeriv, -m->opt.timestep, m->nD);
 
     // set qfrc = qLU * qacc
     mju_mulMatVecSparse(qfrc, d->qLU, qacc, nv,
-                        d->D_rownnz, d->D_rowadr, d->D_colind, /*rowsuper=*/NULL);
+                        m->D_rownnz, m->D_rowadr, m->D_colind, /*rowsuper=*/NULL);
     break;
 
   case mjINT_IMPLICITFAST:
@@ -129,19 +129,17 @@ static void mj_discreteAcc(const mjModel* m, mjData* d) {
     mjd_smooth_vel(m, d, /* flg_bias = */ 0);
 
     // save mass matrix
-    mjtNum* qMsave = mj_stackAllocNum(d, m->nM);
-    mju_copy(qMsave, d->qM, m->nM);
+    mjtNum* Msave = mjSTACKALLOC(d, m->nC, mjtNum);
+    mju_copy(Msave, d->M, m->nC);
 
-    // set M = M - dt*qDeriv (reduced to M nonzeros)
-    mjtNum* qDerivReduced = mj_stackAllocNum(d, m->nM);
-    mj_copyD2MSparse(m, d, qDerivReduced, d->qDeriv);
-    mju_addToScl(d->qM, qDerivReduced, -m->opt.timestep, m->nM);
+    // modified mass matrix: gather qH <- qDeriv (full to lower)
+    mju_gather(d->qH, d->qDeriv, m->mapD2M, nC);
+
+    // set qH = M - dt*qDeriv
+    mju_addScl(d->qH, d->M, d->qH, -m->opt.timestep, nC);
 
     // set qfrc = (M - dt*qDeriv) * qacc
-    mj_mulM(m, d, qfrc, qacc);
-
-    // restore mass matrix
-    mju_copy(d->qM, qMsave, m->nM);
+    mju_mulSymVecSparse(qfrc, d->qH, qacc, m->nv, m->M_rownnz, m->M_rowadr, m->M_colind);
     break;
   }
 
@@ -150,7 +148,6 @@ static void mj_discreteAcc(const mjModel* m, mjData* d) {
 
   mj_freeStack(d);
 }
-
 
 
 // inverse constraint solver
@@ -166,7 +163,7 @@ void mj_invConstraint(const mjModel* m, mjData* d) {
   }
 
   mj_markStack(d);
-  mjtNum* jar = mj_stackAllocNum(d, nefc);
+  mjtNum* jar = mjSTACKALLOC(d, nefc, mjtNum);
 
   // compute jar = Jac*qacc - aref
   mj_mulJacVec(m, d, jar, d->qacc);
@@ -178,7 +175,6 @@ void mj_invConstraint(const mjModel* m, mjData* d) {
   mj_freeStack(d);
   TM_END(mjTIMER_CONSTRAINT);
 }
-
 
 
 // inverse dynamics with skip; skipstage is mjtStage
@@ -213,7 +209,7 @@ void mj_inverseSkip(const mjModel* m, mjData* d,
 
   if (mjENABLED(mjENBL_INVDISCRETE)) {
     // save current qacc
-    qacc = mj_stackAllocNum(d, nv);
+    qacc = mjSTACKALLOC(d, nv, mjtNum);
     mju_copy(qacc, d->qacc, nv);
 
     // modify qacc in-place
@@ -222,15 +218,22 @@ void mj_inverseSkip(const mjModel* m, mjData* d,
 
   // acceleration-dependent
   mj_invConstraint(m, d);
-  mj_rne(m, d, 1, d->qfrc_inverse);
+
+  // sum of bias forces in qfrc_inverse = centripetal + Coriolis + tendon bias
+  mj_rne(m, d, 0, d->qfrc_inverse);
+  mj_tendonBias(m, d, d->qfrc_inverse);
+
   if (!skipsensor) {
     mj_sensorAcc(m, d);
   }
 
-  // qfrc_inverse += armature*qacc - qfrc_passive - qfrc_constraint
+  // compute Ma = M*qacc
+  mjtNum* Ma = mjSTACKALLOC(d, nv, mjtNum);
+  mj_mulM(m, d, Ma, d->qacc);
+
+  // qfrc_inverse += Ma - qfrc_passive - qfrc_constraint
   for (int i=0; i < nv; i++) {
-    d->qfrc_inverse[i] += m->dof_armature[i]*d->qacc[i]
-                          - d->qfrc_passive[i] - d->qfrc_constraint[i];
+    d->qfrc_inverse[i] += Ma[i] - d->qfrc_passive[i] - d->qfrc_constraint[i];
   }
 
   if (mjENABLED(mjENBL_INVDISCRETE)) {
@@ -243,12 +246,10 @@ void mj_inverseSkip(const mjModel* m, mjData* d,
 }
 
 
-
 // inverse dynamics
 void mj_inverse(const mjModel* m, mjData* d) {
   mj_inverseSkip(m, d, mjSTAGE_NONE, 0);
 }
-
 
 
 // compare forward and inverse dynamics, without changing results of forward
@@ -266,10 +267,10 @@ void mj_compareFwdInv(const mjModel* m, mjData* d) {
 
   // allocate
   mj_markStack(d);
-  qforce = mj_stackAllocNum(d, nv);
-  dif = mj_stackAllocNum(d, nv);
-  save_qfrc_constraint = mj_stackAllocNum(d, nv);
-  save_efc_force = mj_stackAllocNum(d, nefc);
+  qforce = mjSTACKALLOC(d, nv, mjtNum);
+  dif = mjSTACKALLOC(d, nv, mjtNum);
+  save_qfrc_constraint = mjSTACKALLOC(d, nv, mjtNum);
+  save_efc_force = mjSTACKALLOC(d, nefc, mjtNum);
 
   // qforce = qfrc_applied + J'*xfrc_applied + qfrc_actuator
   //  should equal result of inverse dynamics

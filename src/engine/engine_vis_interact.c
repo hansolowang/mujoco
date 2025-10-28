@@ -14,17 +14,16 @@
 
 #include "engine/engine_vis_interact.h"
 
-#include <math.h>
 #include <stddef.h>
 
 #include <mujoco/mjdata.h>
-#include <mujoco/mjexport.h>
 #include <mujoco/mjmodel.h>
+#include <mujoco/mjsan.h>  // IWYU pragma: keep
 #include <mujoco/mjvisualize.h>
 #include "engine/engine_core_smooth.h"
-#include "engine/engine_io.h"
+#include "engine/engine_core_util.h"
+#include "engine/engine_memory.h"
 #include "engine/engine_ray.h"
-#include "engine/engine_support.h"
 #include "engine/engine_util_blas.h"
 #include "engine/engine_util_errmem.h"
 #include "engine/engine_util_misc.h"
@@ -64,7 +63,6 @@ void mjv_room2model(mjtNum* modelpos, mjtNum* modelquat, const mjtNum* roompos,
 }
 
 
-
 // transform pose from model to room space
 void mjv_model2room(mjtNum* roompos, mjtNum* roomquat, const mjtNum* modelpos,
                     const mjtNum* modelquat, const mjvScene* scn) {
@@ -94,7 +92,6 @@ void mjv_model2room(mjtNum* roompos, mjtNum* roomquat, const mjtNum* modelpos,
     mju_copy4(roomquat, modelquat);
   }
 }
-
 
 
 // get camera info in model space: average left and right OpenGL cameras
@@ -170,7 +167,6 @@ void mjv_cameraInModel(mjtNum* headpos, mjtNum* forward, mjtNum* up, const mjvSc
 }
 
 
-
 // get camera info in room space: average left and right OpenGL cameras
 void mjv_cameraInRoom(mjtNum* headpos, mjtNum* forward, mjtNum* up, const mjvScene* scn) {
   mjtNum pos[3], fwd[3], u[3];
@@ -220,7 +216,6 @@ void mjv_cameraInRoom(mjtNum* headpos, mjtNum* forward, mjtNum* up, const mjvSce
 }
 
 
-
 // get frustum height at unit distance from camera; average left and right OpenGL cameras
 mjtNum mjv_frustumHeight(const mjvScene* scn) {
   const mjvGLCamera* cam1 = scn->camera;
@@ -252,9 +247,8 @@ mjtNum mjv_frustumHeight(const mjvScene* scn) {
 }
 
 
-
 // rotate 3D vec in horizontal plane by angle between (0,1) and (forward_x,forward_y)
-MJAPI void mjv_alignToCamera(mjtNum* res, const mjtNum* vec, const mjtNum* forward) {
+void mjv_alignToCamera(mjtNum* res, const mjtNum* vec, const mjtNum* forward) {
   mjtNum xaxis[2], yaxis[2];
 
   // forward-aligned y-axis
@@ -270,7 +264,6 @@ MJAPI void mjv_alignToCamera(mjtNum* res, const mjtNum* vec, const mjtNum* forwa
   res[1] = vec[0]*xaxis[1] + vec[1]*yaxis[1];
   res[2] = vec[2];
 }
-
 
 
 // convert 2D mouse motion to z-aligned 3D world coordinates
@@ -292,12 +285,14 @@ static void convert2D(mjtNum* res, int action, mjtNum dx, mjtNum dy, const mjtNu
     break;
 
   case mjMOUSE_MOVE_V:
+  case mjMOUSE_MOVE_V_REL:
     vec[0] = dx;
     vec[1] = 0;
     vec[2] = -dy;
     break;
 
   case mjMOUSE_MOVE_H:
+  case mjMOUSE_MOVE_H_REL:
     vec[0] = dx;
     vec[1] = -dy;
     vec[2] = 0;
@@ -315,11 +310,10 @@ static void convert2D(mjtNum* res, int action, mjtNum dx, mjtNum dy, const mjtNu
 }
 
 
-
 // move camera with mouse; action is mjtMouse
 void mjv_moveCamera(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
                     const mjvScene* scn, mjvCamera* cam) {
-  mjtNum headpos[3], forward[3];
+  mjtNum headpos[3], forward[3], up[3], right[3];
   mjtNum vec[3], dif[3], scl;
 
   // fixed camera: nothing to do
@@ -361,6 +355,25 @@ void mjv_moveCamera(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
     cam->distance -= mju_log(1 + cam->distance/m->stat.extent/3) * reldy * 9 * m->stat.extent;
     break;
 
+  case mjMOUSE_MOVE_V_REL:
+  case mjMOUSE_MOVE_H_REL:
+    // do not move lookat point of tracking camera
+    if (cam->type == mjCAMERA_TRACKING) {
+      return;
+    }
+
+    mjv_cameraInModel(headpos, forward, up, scn);
+    mju_cross(right, forward, up);
+
+    // y-axis movement moves forward/backward (ie. camera dolly) on horizontal plane or up/down
+    // (ie. camera pedestal) on vertical plane
+    mju_addToScl3(cam->lookat, (action == mjMOUSE_MOVE_V_REL) ? up : forward, reldy);
+
+    // x-axis movement strafes left/right (ie. camera truck)
+    mju_addToScl3(cam->lookat, right, reldx);
+
+    break;
+
   default:
     mjERROR("unexpected action %d", action);
   }
@@ -387,11 +400,15 @@ void mjv_moveCamera(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
 }
 
 
-
 // move perturb object with mouse; action is mjtMouse
 void mjv_movePerturb(const mjModel* m, const mjData* d, int action, mjtNum reldx,
                      mjtNum reldy, const mjvScene* scn, mjvPerturb* pert) {
+  const mjtNum xaxis[3] = {1, 0, 0};
+  const mjtNum yaxis[3] = {0, 1, 0};
+  const mjtNum zaxis[3] = {0, 0, 1};
+
   int sel = pert->select;
+  const mjtNum* xmat = d->xmat+9*sel;
   mjtNum forward[3], vec[3], scl, q1[4], xiquat[4];
 
   // get camera info and align
@@ -402,8 +419,27 @@ void mjv_movePerturb(const mjModel* m, const mjData* d, int action, mjtNum reldx
   switch ((mjtMouse) action) {
   case mjMOUSE_MOVE_V:
   case mjMOUSE_MOVE_H:
+    // move along world-space horizontal/vertical planes relative to camera
     mju_addToScl3(pert->refpos, vec, pert->scale);
     mju_addToScl3(pert->refselpos, vec, pert->scale);
+    break;
+
+  case mjMOUSE_MOVE_V_REL:
+  case mjMOUSE_MOVE_H_REL:
+    // move along object's local coordinate frame
+    if (action == mjMOUSE_MOVE_H_REL) {
+      mju_mulMatVec3(vec, xmat, xaxis);
+      mju_addToScl3(pert->refpos, vec, pert->scale * reldy);
+      mju_addToScl3(pert->refselpos, vec, pert->scale * reldy);
+    } else {
+      mju_mulMatVec3(vec, xmat, zaxis);
+      mju_addToScl3(pert->refpos, vec, pert->scale * reldy);
+      mju_addToScl3(pert->refselpos, vec, pert->scale * reldy);
+    }
+
+    mju_mulMatVec3(vec, xmat, yaxis);
+    mju_addToScl3(pert->refpos, vec, pert->scale * reldx);
+    mju_addToScl3(pert->refselpos, vec, pert->scale * reldx);
     break;
 
   case mjMOUSE_ROTATE_V:
@@ -454,7 +490,6 @@ void mjv_movePerturb(const mjModel* m, const mjData* d, int action, mjtNum reldx
 }
 
 
-
 // move model with mouse; action is mjtMouse
 void mjv_moveModel(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
                    const mjtNum roomup[3], mjvScene* scn) {
@@ -497,19 +532,21 @@ void mjv_moveModel(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
     // get current model rotation
     mju_f2n(rotate, scn->rotate, 4);
 
-    // compose rotation, normalize and and set
+    // compose rotation, normalize and set
     mju_mulQuat(result, quat, rotate);
     mju_normalize4(result);
     mju_n2f(scn->rotate, result, 4);
     break;
 
   case mjMOUSE_MOVE_V:
+  case mjMOUSE_MOVE_V_REL:
     for (int i=0; i < 3; i++) {
       scn->translate[i] += (float)(roomright[i]*reldx - roomup[i]*reldy) * m->stat.extent;
     }
     break;
 
   case mjMOUSE_MOVE_H:
+  case mjMOUSE_MOVE_H_REL:
     for (int i=0; i < 3; i++) {
       scn->translate[i] += (float)(roomright[i]*reldx - roomforward[i]*reldy) * m->stat.extent;
     }
@@ -530,7 +567,6 @@ void mjv_moveModel(const mjModel* m, int action, mjtNum reldx, mjtNum reldy,
 }
 
 
-
 // copy perturb pos,quat from selected body; set scale for perturbation
 void mjv_initPerturb(const mjModel* m, mjData* d, const mjvScene* scn, mjvPerturb* pert) {
   mj_markStack(d);
@@ -539,8 +575,9 @@ void mjv_initPerturb(const mjModel* m, mjData* d, const mjvScene* scn, mjvPertur
   int sel = pert->select;
   mjtNum headpos[3], forward[3], dif[3];
 
-  mjtNum* jac = mj_stackAllocNum(d, 3*nv);
-  mjtNum* jacM2 = mj_stackAllocNum(d, 3*nv);
+  mjtNum* jac = mjSTACKALLOC(d, 3*nv, mjtNum);
+  mjtNum* jacM2 = mjSTACKALLOC(d, 3*nv, mjtNum);
+  mjtNum* sqrtInvD = mjSTACKALLOC(d, nv, mjtNum);
 
   // invalid selected body: return
   if (sel <= 0 || sel >= m->nbody) {
@@ -554,8 +591,11 @@ void mjv_initPerturb(const mjModel* m, mjData* d, const mjvScene* scn, mjvPertur
   mju_addTo3(selpos, d->xpos+3*sel);
 
   // compute average spatial inertia at selection point
+  for (int i=0; i < nv; i++) {
+    sqrtInvD[i] = mju_sqrt(d->qLDiagInv[i]);
+  }
   mj_jac(m, d, jac, NULL, selpos, sel);
-  mj_solveM2(m, d, jacM2, jac, 3);
+  mj_solveM2(m, d, jacM2, jac, sqrtInvD, 3);
   mjtNum invmass = mju_dot(jacM2+0*nv, jacM2+0*nv, nv) +
                    mju_dot(jacM2+1*nv, jacM2+1*nv, nv) +
                    mju_dot(jacM2+2*nv, jacM2+2*nv, nv);
@@ -584,7 +624,6 @@ void mjv_initPerturb(const mjModel* m, mjData* d, const mjvScene* scn, mjvPertur
 
   mj_freeStack(d);
 }
-
 
 
 // set perturb pos,quat in d->mocap when selected body is mocap, and in d->qpos otherwise
@@ -640,7 +679,6 @@ void mjv_applyPerturbPose(const mjModel* m, mjData* d, const mjvPerturb* pert, i
 }
 
 
-
 // set perturb force,torque in d->xfrc_applied, if selected body is dynamic
 void mjv_applyPerturbForce(const mjModel* m, mjData* d, const mjvPerturb* pert) {
   int sel = pert->select;
@@ -689,7 +727,7 @@ void mjv_applyPerturbForce(const mjModel* m, mjData* d, const mjvPerturb* pert) 
     mju_addTo3(svel, body_linvel);
 
     // add critical damping force of selection point
-    mju_addToScl3(force, svel, -sqrtf(stiffness)*pert->localmass);
+    mju_addToScl3(force, svel, -mju_sqrt(stiffness)*pert->localmass);
 
     // torque on body com due to force
     mju_cross(torque, moment_arm, force);
@@ -697,7 +735,7 @@ void mjv_applyPerturbForce(const mjModel* m, mjData* d, const mjvPerturb* pert) 
     // add critically damped torsional torque along displacement axis
     stiffness = m->vis.map.stiffnessrot;
     mju_normalize3(diff);
-    mju_addToScl3(torque, diff, -sqrtf(stiffness)*inertia*mju_dot3(diff, body_rotvel));
+    mju_addToScl3(torque, diff, -mju_sqrt(stiffness)*inertia*mju_dot3(diff, body_rotvel));
   }
 
   if (((pert->active | pert->active2) & mjPERT_ROTATE)) {
@@ -708,10 +746,9 @@ void mjv_applyPerturbForce(const mjModel* m, mjData* d, const mjvPerturb* pert) 
     mju_negQuat(xiquat, xiquat);
     mju_mulQuat(difquat, pert->refquat, xiquat);
     mju_quat2Vel(torque, difquat, 1.0/(stiffness*inertia));
-    mju_addToScl3(torque, body_rotvel, -sqrtf(stiffness)*inertia);
+    mju_addToScl3(torque, body_rotvel, -mju_sqrt(stiffness)*inertia);
   }
 }
-
 
 
 // return the average of two OpenGL cameras
@@ -760,7 +797,6 @@ mjvGLCamera mjv_averageCamera(const mjvGLCamera* cam1, const mjvGLCamera* cam2) 
 
   return cam;
 }
-
 
 
 // Select geom, flex or skin with mouse, return bodyid; -1: none selected.
@@ -824,9 +860,33 @@ int mjv_select(const mjModel* m, const mjData* d, const mjvOption* vopt,
       // update if closer intersection found
       if (newdist >= 0 && (newdist < flexdist || flexdist < 0)) {
         flexdist = newdist;
-        flexbodyid = m->flex_vertbodyid[m->flex_vertadr[i] + vertid];
+        if (m->flex_interp[i]) {
+          mjtNum* coord = m->flex_vert0 + 3*(m->flex_vertadr[i] + vertid);
+          int nodeid = -1;
+          int nstart = m->flex_nodeadr[i];
+          int nend = nstart + m->flex_nodenum[i];
+          mjtNum w = 0;
+          for (int j = nstart; j < nend; j++) {
+            if (mju_evalBasis(coord, j-nstart, m->flex_interp[i]) > w) {
+              w = mju_evalBasis(coord, j-nstart, m->flex_interp[i]);
+              nodeid = j;
+            }
+          }
+          if (nodeid < 0) {
+            mjERROR("flex %d: node closest to vertex %d not found", i, vertid);
+          }
+          flexbodyid = m->flex_nodebodyid[m->flex_nodeadr[i] + nodeid];
+          if (m->flex_centered[i]) {
+            mju_copy3(flexpnt, d->xpos + 3*flexbodyid);
+          } else {
+            mju_mulMatVec3(flexpnt, d->xmat + 9*flexbodyid, m->flex_node + 3*nodeid);
+            mju_addTo3(flexpnt, d->xpos + 3*flexbodyid);
+          }
+        } else {
+          flexbodyid = m->flex_vertbodyid[m->flex_vertadr[i] + vertid];
+          mju_copy3(flexpnt, d->flexvert_xpos + 3*(m->flex_vertadr[i] + vertid));
+        }
         *flexid = i;
-        mju_copy3(flexpnt, d->flexvert_xpos + 3*(m->flex_vertadr[i] + vertid));
       }
     }
   }

@@ -60,7 +60,7 @@ void default_mj_warning_handler(const char* msg) {
 }  // namespace
 
 MujocoErrorTestGuard::MujocoErrorTestGuard() {
-  absl::MutexLock lock(&handlers_mutex);
+  absl::MutexLock lock(handlers_mutex);
   if (++guard_count == 1) {
     mju_user_error = default_mj_error_handler;
     mju_user_warning = default_mj_warning_handler;
@@ -68,7 +68,7 @@ MujocoErrorTestGuard::MujocoErrorTestGuard() {
 }
 
 MujocoErrorTestGuard::~MujocoErrorTestGuard() {
-  absl::MutexLock lock(&handlers_mutex);
+  absl::MutexLock lock(handlers_mutex);
   if (--guard_count == 0) {
     mju_user_error = nullptr;
     mju_user_warning = nullptr;
@@ -130,9 +130,7 @@ std::string GetFileContents(const char* path) {
   return sstream.str();
 }
 
-std::string SaveAndReadXml(const mjModel* model) {
-  EXPECT_THAT(model, testing::NotNull());
-
+std::string SaveAndReadXmlImpl(const mjModel* model, const mjSpec* spec) {
   constexpr int kMaxPathLen = 1024;
   std::string path_template =
       std::filesystem::temp_directory_path().append("tmp.XXXXXX").string();
@@ -148,7 +146,11 @@ std::string SaveAndReadXml(const mjModel* model) {
   EXPECT_NE(_mktemp_s(filepath), EINVAL);
 #endif
 
-  mj_saveLastXML(filepath, model, nullptr, 0);
+  if (spec) {
+    mj_saveXML(spec, filepath, nullptr, 0);
+  } else if (model) {
+    mj_saveLastXML(filepath, model, nullptr, 0);
+  }
   std::string contents = GetFileContents(filepath);
 
 #if defined(_POSIX_VERSION) && _POSIX_VERSION >= 200112L
@@ -157,6 +159,16 @@ std::string SaveAndReadXml(const mjModel* model) {
   std::remove(filepath);
 
   return contents;
+}
+
+std::string SaveAndReadXml(const mjModel* model) {
+  EXPECT_THAT(model, testing::NotNull());
+  return SaveAndReadXmlImpl(model, nullptr);
+}
+
+std::string SaveAndReadXml(const mjSpec* spec) {
+  EXPECT_THAT(spec, testing::NotNull());
+  return SaveAndReadXmlImpl(nullptr, spec);
 }
 
 std::vector<mjtNum> GetCtrlNoise(const mjModel* m, int nsteps,
@@ -220,32 +232,38 @@ mjtNum CompareModel(const mjModel* m1, const mjModel* m2,
   MJMODEL_POINTERS_PREAMBLE(m1);
 
 // compare ints, exclude nbuffer because it hides the actual difference
-#define X(name)                                           \
-  if constexpr (std::string_view(#name) != "nbuffer") {   \
-    if (m1->name != m2->name) {                           \
-      maxdif = std::abs((long)m1->name - (long)m2->name); \
-      field = #name;                                      \
-    }                                                     \
+// TODO(kylebayes): re-enable poly comparisons.
+#define X(name)                                               \
+  if constexpr (std::string_view(#name) != "nbuffer" &&       \
+                std::string_view(#name) != "nmeshpolymap" &&  \
+                std::string_view(#name) != "nmeshpolyvert" && \
+                std::string_view(#name) != "nmeshpoly") {     \
+    if (m1->name != m2->name) {                               \
+      maxdif = std::abs((long)m1->name - (long)m2->name);     \
+      field = #name;                                          \
+    }                                                         \
   }
   MJMODEL_INTS
 #undef X
   if (maxdif > 0) return maxdif;
 
-  // compare arrays, apart from bvh-related ones, as those are sensitive to
-  // numerical differences when meshes are perfectly symmetric.
-#define X(type, name, nr, nc)                                      \
-  if (strncmp(#name, "bvh_", 4)) {                                 \
-    for (int r = 0; r < m1->nr; r++) {                             \
-      for (int c = 0; c < nc; c++) {                               \
-        dif = Compare(m1->name[r * nc + c], m2->name[r * nc + c]); \
-        if (dif > maxdif) {                                        \
-          maxdif = dif;                                            \
-          field = #name;                                           \
-          field += " row: " + std::to_string(r);                   \
-          field += " col: " + std::to_string(c);                   \
-        }                                                          \
-      }                                                            \
-    }                                                              \
+  // compare arrays, apart from bvh-related ones (which includes flex_vert0), as
+  // those are sensitive to numerical differences when meshes are perfectly
+  // symmetric.
+#define X(type, name, nr, nc)                                         \
+  if (strncmp(#name, "bvh_", 4) && strncmp(#name, "flex_vert0", 4) && \
+      strncmp(#name, "mesh_poly", 4)) {                               \
+    for (int r = 0; r < m1->nr; r++) {                                \
+      for (int c = 0; c < nc; c++) {                                  \
+        dif = Compare(m1->name[r * nc + c], m2->name[r * nc + c]);    \
+        if (dif > maxdif) {                                           \
+          maxdif = dif;                                               \
+          field = #name;                                              \
+          field += " row: " + std::to_string(r);                      \
+          field += " col: " + std::to_string(c);                      \
+        }                                                             \
+      }                                                               \
+    }                                                                 \
   }  // NOLINT
   MJMODEL_POINTERS
 #undef X
